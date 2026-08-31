@@ -1,7 +1,18 @@
+"""
+A class for mapping binary strings to DNA sequences and vice versa.
+
+This class provides methods to encode a binary string into a DNA sequence and decode a DNA sequence back into a binary 
+string. It also includes methods to read from and write to files for both encoding and decoding processes.
+"""
+
 from HuffmanCoding import Huffman
+
 
 class DNAEncodedMap:
     def __init__(self) -> None:
+        """
+        Initializes a new instance of the DNAEncodedMap class.
+        """
         # After encoding, use the binary string to map to DNA bases
         self.DNA_MAP = {
             '00': 'A',
@@ -14,6 +25,18 @@ class DNAEncodedMap:
 
 
     def encode(self, binary_string: str) -> tuple[bool, str]:
+        """
+        Encodes a binary string into a DNA sequence.
+
+        Maps each pair of bits in the binary string to a corresponding DNA base. If the length of the binary string is 
+        odd, a '0' is appended to the end to make it even, and a flag is set to indicate that padding was added.
+
+        Args:
+            binary_string: The binary string to be encoded.
+        
+        Returns:
+            A tuple containing a boolean indicating whether padding was added and the resulting DNA sequence.
+        """
         # Remove any leading/trailing whitespace, causes problems
         binary_string = binary_string.strip()
 
@@ -35,8 +58,19 @@ class DNAEncodedMap:
 
 
     def encode_to_file(self, in_path: str, out_path: str, is_huffman=True) -> None:
+        """
+        Encodes a binary string from a file into a DNA sequence and writes it to another file.
+
+        Args:
+            in_path: The path to the input file containing the binary string.
+            out_path: The path to the output file where the DNA sequence will be written.
+            is_huffman: A flag indicating whether Huffman coding is used.
+
+        Returns:
+            None
+        """
         # Read the binary string from the input file
-        with open(in_path, 'r') as f:
+        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
             binary_string: str = f.read()
 
             # Incase we have the table attached
@@ -49,7 +83,7 @@ class DNAEncodedMap:
                 # Get the data itself
                 binary_string = parts[0].strip()
                 # Get the table - will remain untouched, think of it as metadata
-                raw_table: str = parts[1].strip()
+                raw_table: str = parts[1].rstrip()
 
         # Encode the binary string to DNA
         has_padding:bool 
@@ -57,24 +91,31 @@ class DNAEncodedMap:
         has_padding, dna_string = self.encode(binary_string)
 
         # Write the DNA string to the output file
-        with open(out_path, 'w') as f:
+        with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
             f.write(dna_string)
             f.write("\n")
 
             if is_huffman:
                 f.write(Huffman().SEPARATOR)
-                f.write("\n")
                 f.write(raw_table)
                 f.write("\n")
 
-            # TODO: should really be done as a metafile
             # Add indicator for if padding was added or not
             f.write(Huffman().SEPARATOR)
-            f.write("\n")
             f.write("1") if has_padding else f.write("0")
 
 
     def decode(self, dna_string: str, has_padding: bool) -> str:
+        """
+        Decodes a DNA sequence back to a binary string.
+
+        Args:
+            dna_string: The DNA sequence to be decoded.
+            has_padding: A boolean indicating whether padding was added during encoding.
+
+        Returns:
+            The decoded binary string.
+        """
         # Decode the DNA string back to binary
         binary_string: str = ""
         for base in dna_string:
@@ -88,8 +129,18 @@ class DNAEncodedMap:
 
 
     def decode_to_file(self, in_path: str, out_path: str) -> None: 
+        """
+        Decodes a DNA sequence from a file back to a binary string and writes it to another file.
+
+        Args:
+            in_path: The path to the input file containing the DNA sequence.
+            out_path: The path to the output file where the decoded binary string will be written.
+
+        Returns:
+            None
+        """
         # Read the DNA string from the input file
-        with open(in_path, 'r') as f:
+        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
             data: str = f.read()
             is_huffman: bool = False
             parts: list[str] = data.split(Huffman().SEPARATOR)
@@ -97,7 +148,7 @@ class DNAEncodedMap:
             # Had table, means is in huffman format
             if len(parts) == 3:
                 dna_string: str = parts[0].strip()
-                raw_table: str = parts[1].strip()
+                raw_table: str = parts[1].rstrip()
                 is_huffman = True
             # No table, means is in standard format
             elif len(parts) == 2:
@@ -134,5 +185,5 @@ class DNAEncodedMap:
             decoded_data: str = binary_string
 
         # Write the decoded data to the output file
-        with open(out_path, 'w') as f:
+        with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
             f.write(decoded_data)
