@@ -57,7 +57,7 @@ class DNAEncodedMap:
         return has_padding, dna_string
 
 
-    def encode_to_file(self, in_path: str, out_path: str, is_huffman=True) -> None:
+    def encode_to_file(self, in_path: str, out_path: str, is_huffman=True) -> str:
         """
         Encodes a binary string from a file into a DNA sequence and writes it to another file.
 
@@ -67,7 +67,7 @@ class DNAEncodedMap:
             is_huffman: A flag indicating whether Huffman coding is used.
 
         Returns:
-            None
+            The encoded DNA sequence with tabel.
         """
         # Read the binary string from the input file
         with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -86,23 +86,20 @@ class DNAEncodedMap:
                 raw_table: str = parts[1].rstrip()
 
         # Encode the binary string to DNA
-        has_padding:bool 
+        has_padding: bool 
         dna_string: str 
         has_padding, dna_string = self.encode(binary_string)
 
+        # Format the output to include the DNA string, the Huffman table (if applicable), and the padding indicator
+        output: str = dna_string + "\n"
+        output += Huffman().SEPARATOR + raw_table + "\n" if is_huffman else ""
+        output += Huffman().SEPARATOR + ("1" if has_padding else "0")
+
         # Write the DNA string to the output file
         with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
-            f.write(dna_string)
-            f.write("\n")
+            f.write(output)
 
-            if is_huffman:
-                f.write(Huffman().SEPARATOR)
-                f.write(raw_table)
-                f.write("\n")
-
-            # Add indicator for if padding was added or not
-            f.write(Huffman().SEPARATOR)
-            f.write("1") if has_padding else f.write("0")
+        return output
 
 
     def decode(self, dna_string: str, has_padding: bool) -> str:
@@ -128,7 +125,7 @@ class DNAEncodedMap:
         return binary_string
 
 
-    def decode_to_file(self, in_path: str, out_path: str) -> None: 
+    def decode_to_file(self, in_path: str, out_path: str) -> str: 
         """
         Decodes a DNA sequence from a file back to a binary string and writes it to another file.
 
@@ -137,7 +134,7 @@ class DNAEncodedMap:
             out_path: The path to the output file where the decoded binary string will be written.
 
         Returns:
-            None
+            The decoded binary string.
         """
         # Read the DNA string from the input file
         with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -161,13 +158,6 @@ class DNAEncodedMap:
             # Padding is always last
             raw_padding: str = parts[-1].strip()
 
-        # Format our table
-        huffman_codes: dict[str, str] = Huffman().format_table(raw_table)
-
-        # Ensure proper table
-        if raw_table and not huffman_codes:
-            raise ValueError("Invalid table format. Could not parse the Huffman table.")
-
         # Make sure the padding indicator is valid
         if raw_padding not in {"0", "1"}:
             raise ValueError("Invalid padding indicator. Expected '0' or '1'.")
@@ -179,6 +169,13 @@ class DNAEncodedMap:
         binary_string: str = self.decode(dna_string, has_padding)
 
         if is_huffman:
+            # Format our table
+            huffman_codes: dict[str, str] = Huffman().format_table(raw_table)
+
+            # Ensure proper table
+            if raw_table and not huffman_codes:
+                raise ValueError("Invalid table format. Could not parse the Huffman table.")
+            
             # Decode the binary string back to original data using the Huffman table
             decoded_data: str = Huffman().decode(binary_string, huffman_codes)
         else:
@@ -187,3 +184,43 @@ class DNAEncodedMap:
         # Write the decoded data to the output file
         with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
             f.write(decoded_data)
+
+        return decoded_data
+
+
+    def calculate_size(self, encoded_data: str) -> tuple[int, int]:
+        """
+        Calculates the size of the encoded data in bits.
+
+        Args:
+            encoded_data: The encoded data as a string.
+
+        Returns:
+            The size of the encoded data in bits and the size of the table in bits.
+
+        Raises:
+            ValueError: If the encoded data format is invalid.
+        """
+        encoded_size: int = 0
+        table_size: int = 0
+
+        parts: list[str] = encoded_data.split(Huffman().SEPARATOR)
+
+        # In huffman
+        if len(parts) == 3:
+            table_part: str = parts[1].rstrip()
+            huffman_codes: dict[str, str] = Huffman().format_table(table_part)
+            # Each character is 8 bits, plus the length of the code
+            for char, code in huffman_codes.items():
+                table_size += 8 + len(code)  
+        elif len(parts) == 2:
+            pass
+        else:
+            raise ValueError("Invalid input format. Expected a separator between table and encoded data.")
+
+        # Each DNA base represents 2 bits
+        encoded_size = len(parts[0].strip()) * 2 
+
+
+        # 1 bit for padding stored with table
+        return (encoded_size, table_size + 1)

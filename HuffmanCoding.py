@@ -143,13 +143,16 @@ class Huffman:
         return huffman_codes, encoded_data
 
 
-    def encode_from_file(self, in_path: str, out_path: str) -> None:
+    def encode_from_file(self, in_path: str, out_path: str) -> str:
         """
         Encodes the data from the input file and writes the encoded data and Huffman table to the output file.
 
         Args:
             in_path: Path to the input file containing the data to be encoded.
             out_path: Path to the output file where the encoded data and Huffman table will be written.
+
+        Returns:
+            The encoded data as a string.
 
         Raises:
             FileNotFoundError: If the input file does not exist.
@@ -161,18 +164,17 @@ class Huffman:
         # Get the Huffman codes and encoded data
         huffman_codes, encoded_data = self.encode(data)
 
+        # Record the separator to separate the table and encoded data
+        # Note: This is a theoretical implementation and purely used to showcase the concep
+        output: str = encoded_data + "\n" + self.SEPARATOR
+        # Then the table
+        output += "\n".join(f"{char}:{code}" for char, code in huffman_codes.items())
+
         # Write the table and encoded data to the output file
         with open(out_path, 'w') as f:
-            # Encoded data first for easier parsing
-            f.write(encoded_data)
+            f.write(output)
 
-            # Record the separator to separate the table and encoded data
-            # Note: This is a theoretical implementation and purely used to showcase the concept
-            f.write("\n")
-            f.write(self.SEPARATOR)
-
-            # Then the table
-            f.write("\n".join(f"{char}:{code}" for char, code in huffman_codes.items()))
+        return output
 
 
     def format_table(self, raw_table: str) -> dict[str, str]:
@@ -247,13 +249,16 @@ class Huffman:
         return decoded_data
 
 
-    def decode_to_file(self, in_path: str, out_path: str) -> None:
+    def decode_to_file(self, in_path: str, out_path: str) -> str:
         """
         Decodes the encoded data from a file and writes the result to another file.
 
         Args:
             in_path: The path to the input file containing the encoded data.
             out_path: The path to the output file where the decoded data will be written.
+
+        Returns:
+            The decoded data as a string.
 
         Raises:
             FileNotFoundError: If the input file does not exist.
@@ -276,6 +281,41 @@ class Huffman:
         decoded_data: str = self.decode(encoded_data, huffman_codes)
         with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
             f.write(decoded_data)
+
+        return decoded_data
+
+
+    def calculate_size(self, encoded_data: str, multiplier: int=1) -> tuple[int, int]:
+        """
+        Calculates the size of the encoded data and table in bits.
+
+        Args:
+            encoded_data: The encoded data as a string of bits.
+            multiplier: The multiplier to convert the size of the encoded data (1 for binary, 2 for quaternary). 
+                Defaults to 1 (binary).
+
+        Returns:
+            A tuple of the size of the encoded data in bits and size of the table in bits.
+
+        Raises:
+            ValueError: If the encoded data is not a valid binary string.
+        """
+        # Split the encoded data and table
+        values: list[str] = encoded_data.split(self.SEPARATOR)
+        if len(values) != 2:
+            raise ValueError("Invalid encoded data format. Expected a separator between table and encoded data.")
+
+        # Calculate the size of the encoded data in bits
+        encoded_bits = len(values[0]) * multiplier
+
+        # Calculate the size of the table in bits
+        table_bits = 0
+        huffman_codes: dict[str, str] = self.format_table(values[1])
+        for _, code in huffman_codes.items():
+            # Each character is stored as 8 bits (1 byte) and the code is stored as its length in bits
+            table_bits += 8 + (len(code) * multiplier)
+
+        return encoded_bits, table_bits
 
 
 class HuffmanQuaternary(Huffman):
@@ -369,3 +409,18 @@ class HuffmanQuaternary(Huffman):
         _create_code(root_node)
 
         return codes
+
+
+    @override
+    def calculate_size(self, encoded_data: str) -> tuple[int, int]:
+        """
+        Calculates the size of the encoded data in bits and the size of the Huffman table in bits for quaternary Huffman
+        coding.
+
+        Args:
+            encoded_data: The encoded data as a string of DNA bases (A, C, G, T).
+
+        Returns:
+            A tuple of the size of the encoded data in bits and size of the table in bits.
+        """
+        return super().calculate_size(encoded_data, multiplier=2)
