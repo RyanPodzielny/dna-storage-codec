@@ -9,23 +9,22 @@ be stored differently in a real application.
 """
 
 from typing import override
+from Encoding import Encoding
 from PriorityQueue import PriorityQueue
 
 
-class Huffman:
-    def __init__(self,) -> None:
+class Huffman(Encoding):
+    def __init__(self) -> None:
         """
         Initializes the Huffman coding class with an empty priority queue and a separator for encoding and decoding.
         """
+        super().__init__()
 
         self.priority_queue: PriorityQueue = PriorityQueue()
 
-        # Separator to separate the table and encoded data in the output file.
-        # Note: This is a theoretical implementation and should be stored differently in a real application. Speifcally,
-        #   we would sotre the table as a serialized tree as bits, and have the actual encoded data as a bits. 
-        #   Purely to showcase and use for testing - makes it much easier to work with when implementing DNA idea
-        self.SEPARATOR: str = "=====\n"
-
+        # Default multiplier for binary encoding (1 bit per symbol)
+        self.bit_multiplier = 1  
+        
 
     def count_frequencies(self, data: str) -> dict[str, int]:
         """
@@ -95,7 +94,7 @@ class Huffman:
             A dictionary mapping each character to its corresponding Huffman code.
 
         Raises:
-            ValueError: If the priority queue does not contain exactly one node (the root of the
+            ValueError: If the priority queue does not contain exactly one node (the root of the Huffman tree).
         """
 
         # Ensure we only have one node left
@@ -285,14 +284,12 @@ class Huffman:
         return decoded_data
 
 
-    def calculate_size(self, encoded_data: str, multiplier: int=1) -> tuple[int, int]:
+    def calculate_size(self, encoded_data: str) -> tuple[int, int]:
         """
         Calculates the size of the encoded data and table in bits.
 
         Args:
             encoded_data: The encoded data as a string of bits.
-            multiplier: The multiplier to convert the size of the encoded data (1 for binary, 2 for quaternary). 
-                Defaults to 1 (binary).
 
         Returns:
             A tuple of the size of the encoded data in bits and size of the table in bits.
@@ -306,14 +303,14 @@ class Huffman:
             raise ValueError("Invalid encoded data format. Expected a separator between table and encoded data.")
 
         # Calculate the size of the encoded data in bits
-        encoded_bits = len(values[0]) * multiplier
+        encoded_bits = len(values[0]) * self.bit_multiplier
 
         # Calculate the size of the table in bits
         table_bits = 0
         huffman_codes: dict[str, str] = self.format_table(values[1])
         for _, code in huffman_codes.items():
             # Each character is stored as 8 bits (1 byte) and the code is stored as its length in bits
-            table_bits += 8 + (len(code) * multiplier)
+            table_bits += 8 + (len(code) * self.bit_multiplier)
 
         return encoded_bits, table_bits
 
@@ -328,7 +325,11 @@ class HuffmanQuaternary(Huffman):
         """
         super().__init__()
 
+        # Each DNA base represents 2 bits, so we set the bit multiplier accordingly
+        self.bit_multiplier = 2  
+
         self.TREE_ORDER: tuple[str, ...] = ('A', 'C', 'G', 'T')
+
 
     @override
     def build_tree(self, data: str) -> None:
@@ -392,7 +393,6 @@ class HuffmanQuaternary(Huffman):
         codes: dict[str, str] = {}
 
         # Helper function to recursively generate codes
-        @override
         def _create_code(node: tuple, current_code: str="") -> None:
             # If we have a string it is a leaf, otherwise it is an internal node
             if isinstance(node[1], str):  # Leaf node
@@ -409,18 +409,3 @@ class HuffmanQuaternary(Huffman):
         _create_code(root_node)
 
         return codes
-
-
-    @override
-    def calculate_size(self, encoded_data: str) -> tuple[int, int]:
-        """
-        Calculates the size of the encoded data in bits and the size of the Huffman table in bits for quaternary Huffman
-        coding.
-
-        Args:
-            encoded_data: The encoded data as a string of DNA bases (A, C, G, T).
-
-        Returns:
-            A tuple of the size of the encoded data in bits and size of the table in bits.
-        """
-        return super().calculate_size(encoded_data, multiplier=2)
