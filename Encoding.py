@@ -35,8 +35,11 @@ class Encoding:
         }
         self.REVERSE_DNA_MAP: Final[dict[str, str]] = {v: k for k, v in self.DNA_MAP.items()}
 
-        # Default multiplier for binary encoding (1 bit per symbol)
-        self.bit_multiplier: int = 1  
+        # Huffman coding storage
+        # Each character is stored as 8 bits (1 byte)
+        self.KEY_MULTIPLIER: int = 8  
+        # Each bit in the code
+        self.VALUE_MULTIPLIER: int = 1  
 
 
     @abstractmethod
@@ -45,7 +48,7 @@ class Encoding:
 
 
     @abstractmethod
-    def encode_from_file(self, in_path: str, out_path: str) -> str:
+    def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
         pass
 
 
@@ -55,13 +58,44 @@ class Encoding:
 
 
     @abstractmethod
-    def decode_to_file(self, in_path: str, out_path: str) -> str:
+    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
         pass
 
 
     @abstractmethod
     def calculate_size(self, encoded_data: str) -> tuple[int, int]:
         pass
+
+
+    def binary_to_ascii(self, binary_string: str) -> str:
+        """
+        Converts a binary string to an ASCII string.
+
+        Args:
+            binary_string: The binary string to be converted.
+
+        Returns:
+            An ASCII string representation of the binary string.
+        """
+        ascii_string: str = ""
+        for i in range(0, len(binary_string), 8):
+            byte: str = binary_string[i:i+8]
+            ascii_string += chr(int(byte, 2))
+        return ascii_string
+
+
+    def ascii_to_binary(self, ascii_string: str) -> str:
+        """
+        Converts an ASCII string to a binary string.
+
+        Args:
+            ascii_string: The ASCII string to be converted.
+
+        Returns:
+            A binary string representation of the ASCII string.
+        """
+        return ''.join(format(ord(char), '08b') for char in ascii_string)
+
 
 
     def count_runs(self, data: str, k: int = 4) -> int:
@@ -102,13 +136,14 @@ class Encoding:
         return count
 
 
-    def print_info(self, encoded_data: str, k: int = 4) -> None:
+    def print_info(self, encoded_data: str, original_size: int, k: int = 3) -> None:
         """
         Prints the size information of the encoded data.
 
         Args:
             encoded_data: The encoded data as a string.
-            k: The minimum length of a DNA run to be counted. Default is 3.
+            original_size: The size of the original data in bits.
+            k: The minimum length of a DNA run to be counted.
 
         Returns:
             None
@@ -117,13 +152,18 @@ class Encoding:
         table_size: int
         encoded_size, table_size = self.calculate_size(encoded_data)
 
-        print(f"{self.__class__.__name__} Encoding:")
+        print(f"{self.__class__.__name__} Encoding")
         print(f"\tEncoded data size: {encoded_size} bits")
         print(f"\tTable size: {table_size} bits")
         print(f"\tTotal size: {encoded_size + table_size} bits")
 
-        # Count the number of runs of length >= k in the encoded data
-        runs: int = self.count_runs(encoded_data.split(self.SEPARATOR)[0].strip(), k)
         # If it is standard mapping, don't show
-        if runs > 0:
+        if encoded_data[0] in {'A', 'C', 'G', 'T'}:
+            bases: str = encoded_data.split(self.SEPARATOR)[0].strip()
+            runs: int = self.count_runs(bases, k)
+            GC_content: float = (bases.count('G') + bases.count('C')) / len(bases) * 100
+
             print(f"\tNumber of runs of length >= {k}: {runs}")
+            print(f"\tNumber of bases in encoded data: {len(bases)}")
+            print(f"\tGC content: {GC_content:.2f}%")
+            print(f"\tEffective Bits per Nucleotide: {original_size / len(bases):.2f} bits/base")

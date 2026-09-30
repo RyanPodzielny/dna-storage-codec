@@ -4,9 +4,8 @@ This module contains functions to test the encoding and decoding of files using 
 
 import os
 from Encoding import Encoding
-from HuffmanCoding import Huffman, HuffmanQuaternary
+from HuffmanCoding import Huffman, HuffmanBitScanQuaternary, HuffmanQuaternary, HuffmanTrenary
 from DNAMapping import DNAMap, DNAMapHuffman
-
 
 def check_match(original_file: str, decoded_file: str) -> bool:
     """
@@ -30,7 +29,8 @@ def check_match(original_file: str, decoded_file: str) -> bool:
     return original_data == decoded_data
 
 
-def test_encoding(in_path: str, encoded_dir: str, decoded_dir: str, encoding: Encoding, origin_path: str = "") -> str:
+def test_encoding(in_path: str, encoded_dir: str, decoded_dir: str, encoding: Encoding, 
+                  original_size: int, origin_path: str = "", as_binary: bool = False) -> str:
     """
     Tests the encoding and decoding of a single file using Huffman coding and DNA mapping.
 
@@ -39,7 +39,9 @@ def test_encoding(in_path: str, encoded_dir: str, decoded_dir: str, encoding: En
         encoded_dir: The directory to store the encoded file.
         decoded_dir: The directory to store the decoded file.
         encoding: An instance of the Encoding class (Huffman, HuffmanQuaternary, DNAMap, or DNAMapHuffman).
+        original_size: The size of the original file in bits.
         origin_path: The path to the original file for comparison. If not provided, in_path will be used.
+        convert_to_binary: A boolean indicating whether to convert the original file to binary before encoding.
 
     Returns:
         The path to the encoded file.
@@ -47,21 +49,21 @@ def test_encoding(in_path: str, encoded_dir: str, decoded_dir: str, encoding: En
     Raises:
         ValueError: If the original and decoded files do not match after encoding and decoding.
     """
-    if origin_path is "":
+    if origin_path == "":
         origin_path = in_path
 
     # Create the encoded and decoded paths
     encoded_path: str = os.path.join(encoded_dir, encoding.__class__.__name__ + "_encoded.txt")
     decoded_path: str = os.path.join(decoded_dir, encoding.__class__.__name__ + "_decoded.txt")
 
-    encoded_data = encoding.encode_from_file(in_path, encoded_path)
-    encoding.decode_to_file(encoded_path, decoded_path)
+    encoded_data = encoding.encode_from_file(in_path, encoded_path, as_binary=as_binary)
+    encoding.decode_to_file(encoded_path, decoded_path, as_binary=as_binary)
 
     # Check if both match
     if not check_match(origin_path, decoded_path):
         raise ValueError(f"Encoding and decoding failed for {in_path} in {encoding.__class__.__name__}.")
 
-    encoding.print_info(encoded_data)
+    encoding.print_info(encoded_data, original_size)
 
     return encoded_path
 
@@ -93,24 +95,28 @@ def test_file(original_dir: str, encoded_dir: str, decoded_dir: str, file_name: 
     os.makedirs(file_decoded_dir, exist_ok=True)
 
     origin: str = os.path.join(original_dir, file_name)
-
-    # Convert to UTF-8 if not already
-    with open(origin, 'r', encoding='utf-8', errors='ignore') as f:
-        data: str = f.read() 
-        binary_data: str = DNAMap().ascii_to_binary(data)
-        print(f"File: {file_name} - Original Size: {len(binary_data)} bits")
+    # Convert bytes to bits
+    original_size: int = os.path.getsize(origin) * 8  
+    print(f"File: {file_name} - Original Size: {original_size} bits")
 
     # Test Huffmans
-    huffman_encoded_path: str = test_encoding(origin, file_encoded_dir, file_decoded_dir, Huffman())
-    test_encoding(origin, file_encoded_dir, file_decoded_dir, HuffmanQuaternary())
+    huffman_encoded_path: str = test_encoding(origin, file_encoded_dir, file_decoded_dir, Huffman(), original_size)
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, HuffmanQuaternary(), original_size)
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, HuffmanTrenary(), original_size)
+
+    # Find optimal k for HuffmanBitScanQuaternary and test encoding/decoding
+    optimal_k: int = HuffmanBitScanQuaternary().find_optimal_k(origin)[0]
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, HuffmanBitScanQuaternary(k=optimal_k), original_size, 
+                  as_binary=True)
 
     # Before testing DNA mapping, ensure that the Huffman encoded file exists
     if not os.path.exists(huffman_encoded_path):
         raise FileNotFoundError(f"Huffman encoded file {huffman_encoded_path} doesn't exist. Please run Huffman first.")
 
     # Test mapping
-    test_encoding(origin, file_encoded_dir, file_decoded_dir, DNAMap())
-    test_encoding(huffman_encoded_path, file_encoded_dir, file_decoded_dir, DNAMapHuffman(), origin_path=origin)
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, DNAMap(), original_size)
+    test_encoding(huffman_encoded_path, file_encoded_dir, file_decoded_dir, DNAMapHuffman(), 
+                  original_size, origin_path=origin)
 
     print(); print()
 

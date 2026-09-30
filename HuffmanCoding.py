@@ -22,29 +22,53 @@ class Huffman(Encoding):
 
         self.priority_queue: PriorityQueue = PriorityQueue()
 
-        # Default multiplier for binary encoding (1 bit per symbol)
-        self.bit_multiplier = 1  
-        
+        # Separator used to separate the encoded data and the Huffman table in the output file
+        self.KEY_VALUE_SEPARATOR: str = ":"
 
-    def count_frequencies(self, data: str) -> dict[str, int]:
+        # Each character is stored as 8 bits (1 byte)
+        self.KEY_MULTIPLIER: int = 8  
+        # Each bit in the code
+        self.VALUE_MULTIPLIER: int = 1  
+
+        # Standard binary has 2 children
+        self.CHILDREN: int = 2
+
+        # Order for tree when Huffman has more than 2 children
+        self.TREE_ORDER: tuple[str, ...] = ('A', 'C', 'G', 'T')
+
+
+    def count_frequencies(self, data: str, k: int = 1) -> dict[str, int]:
         """
         Counts the frequency of each character in the input data.
+
+        Args:
+            data: The input data to count character frequencies for.
+            k: The length of substrings to count. Default is 1 (individual characters).
         
         Returns:
             A dictionary mapping each character to its frequency in the input data.
         """
         # Count the frequency of each character in the input data
         frequencies: dict[str, int] = {}
-        for char in data:
-            if char in frequencies:
-                frequencies[char] += 1
+        for i in range(0, len(data) - k + 1, k):
+            substring: str = data[i:i + k]
+            if substring in frequencies:
+                frequencies[substring] += 1
             else:
-                frequencies[char] = 1
+                frequencies[substring] = 1
+
+        # Add remaining characters if the length of the string is not a multiple of k
+        if len(data) % k != 0:
+            remaining_substring: str = data[len(data) - (len(data) % k):]
+            if remaining_substring in frequencies:
+                frequencies[remaining_substring] += 1
+            else:
+                frequencies[remaining_substring] = 1
         
         return frequencies
 
 
-    def build_tree(self, data: str) -> None:
+    def build_tree(self, data: str, k: int = 1) -> None:
         """
         Builds the Huffman tree based on the character frequencies in the input data.
 
@@ -53,33 +77,36 @@ class Huffman(Encoding):
 
         Args:
             data: The input data for which the Huffman tree is to be built.
+            k: The length of substrings to consider for frequency counting. Default is 1 (individual characters).
 
         Raises:
             ValueError: If the input data is empty.
         """
 
         # Set up our priority queue with the frequencies
-        self.priority_queue.build_queue(self.count_frequencies(data))
-
-        # Our children
-        left: tuple
-        right: tuple
+        self.priority_queue.build_queue(self.count_frequencies(data, k))
 
         # Merged values
-        merged_frequency: int
+        merged_frequency: int = 0
         merged_node: tuple
 
         # While there is more than one node in the priority queue, we need to merge nodes
         while self.priority_queue.size > 1:
-            # Dequeue the two nodes with the smallest frequencies
-            left = self.priority_queue.dequeue()
-            right = self.priority_queue.dequeue()
+            children: list[tuple[int, str]] = []
+            # Dequeue nodes with smallest frequencies. If we don't have the amount, just take what we can
+            for _ in range(self.CHILDREN):
+                if not self.priority_queue.is_empty():
+                    children.append(self.priority_queue.dequeue())
+                else:
+                    break
 
-            # Create a new internal node with these two nodes as children
-            merged_frequency = left[0] + right[0]
-            merged_node = (merged_frequency, (left, right))
+            # Sum up the frequencies
+            for child in children:
+                merged_frequency += child[0]
 
-            # Enqueue the new node back into the priority queue
+            # Create a new internal node and put pack onto queue
+            merged_node = (merged_frequency, tuple(children))
+
             self.priority_queue.enqueue(merged_node)
 
 
@@ -142,7 +169,7 @@ class Huffman(Encoding):
         return huffman_codes, encoded_data
 
 
-    def encode_from_file(self, in_path: str, out_path: str) -> str:
+    def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
         """
         Encodes the data from the input file and writes the encoded data and Huffman table to the output file.
 
@@ -159,6 +186,8 @@ class Huffman(Encoding):
         # Open the input file and read the data
         with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
             data: str = f.read()
+            if as_binary:
+                data = Encoding().ascii_to_binary(data)
         
         # Get the Huffman codes and encoded data
         huffman_codes, encoded_data = self.encode(data)
@@ -204,7 +233,13 @@ class Huffman(Encoding):
                 is_newline = True
                 continue
 
-            char, code = line[0], line[2:]  
+            # Split on the first occurrence only
+            char, code = line.split(self.KEY_VALUE_SEPARATOR, 1)
+
+            # If the code starts with a colon, means character is colon
+            if code.startswith(self.KEY_VALUE_SEPARATOR):
+                char = self.KEY_VALUE_SEPARATOR
+                code = code[1:]  # Remove the leading colon from the code
 
             # Ensure we record the newline character when found
             if is_newline:
@@ -216,12 +251,13 @@ class Huffman(Encoding):
             if char is None or code is None:
                 raise ValueError("Invalid Huffman table format. Each line should be in the format 'char:code'.")
 
+            # Stores it in reverse so we can decode it later easier
             huffman_codes[code] = char
 
         return huffman_codes
 
 
-    def decode(self,  encoded_data: str, huffman_codes: dict[str, str]) -> str:
+    def decode(self, encoded_data: str, huffman_codes: dict[str, str]) -> str:
         """
         Decodes the encoded data using the provided Huffman codes.
 
@@ -248,7 +284,8 @@ class Huffman(Encoding):
         return decoded_data
 
 
-    def decode_to_file(self, in_path: str, out_path: str) -> str:
+
+    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
         """
         Decodes the encoded data from a file and writes the result to another file.
 
@@ -278,6 +315,8 @@ class Huffman(Encoding):
 
         # Now decode the data using the table
         decoded_data: str = self.decode(encoded_data, huffman_codes)
+        if as_binary:
+            decoded_data = Encoding().binary_to_ascii(decoded_data)
         with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
             f.write(decoded_data)
 
@@ -303,16 +342,92 @@ class Huffman(Encoding):
             raise ValueError("Invalid encoded data format. Expected a separator between table and encoded data.")
 
         # Calculate the size of the encoded data in bits
-        encoded_bits = len(values[0]) * self.bit_multiplier
+        encoded_bits = len(values[0]) * self.VALUE_MULTIPLIER
 
         # Calculate the size of the table in bits
         table_bits = 0
         huffman_codes: dict[str, str] = self.format_table(values[1])
-        for _, code in huffman_codes.items():
+        for code, char in huffman_codes.items():
             # Each character is stored as 8 bits (1 byte) and the code is stored as its length in bits
-            table_bits += 8 + (len(code) * self.bit_multiplier)
+            table_bits += 8 + (len(code) * self.VALUE_MULTIPLIER)
 
         return encoded_bits, table_bits
+
+
+    def calculate_huffman_table_size(self, huffman_codes: dict[str, str]) -> int:
+        """
+        Calculates the size of the Huffman table in bits.
+
+        Args:
+            huffman_codes: A dictionary mapping each character to its corresponding Huffman code.
+        Returns:
+            The size of the Huffman table in bits.
+        """
+        table_size: int = 0
+        for char, code in huffman_codes.items():
+            table_size += len(char) * self.KEY_MULTIPLIER + len(code) * self.VALUE_MULTIPLIER
+
+        return table_size
+
+
+class HuffmanTrenary(Huffman):
+    def __init__(self) -> None:
+        """
+        Initializes a new instance of the HuffmanTrenary class.
+        """
+        super().__init__()
+        self.CHILDREN: int = 3
+
+
+    @override
+    def generate_codes(self) -> dict[str, str]:
+        """
+        Generates the Huffman codes for each DNA base pair on the constructed ternary Huffman tree.
+
+        Returns:
+            A dictionary mapping each character to its corresponding Huffman code.
+
+        Raises:
+            ValueError: If the priority queue does not contain exactly one node (the root of the ternary Huffman).
+        """
+        # Ensure we only have one node left
+        if self.priority_queue.size != 1:
+            raise ValueError("Priority queue should have exactly one node left to generate codes.")
+
+        # Initialize an empty dictionary to hold the codes
+        codes: dict[str, str] = {}
+
+        # Nodes are designated as {A, C, G, T} children cannot have the same code as its parent. This means no code can
+        #   repeat the same character as its parent prevent long runs of the same character in the encoded data.
+        #    This is important for DNA sequences, as long runs of the same base can be problematic.
+        def _create_code(node: tuple, current_code: str="", tree_order: tuple=self.TREE_ORDER[:-1]) -> None:
+            # If we have a string it is a leaf, otherwise it is an internal node
+            if isinstance(node[1], str):  # Leaf node
+                codes[node[1]] = current_code
+                return
+
+            if current_code and current_code[-1] in tree_order:
+                # If the last character of the current code is in the tree order, we need to skip it for the children
+                next_tree_order = tuple(char for char in self.TREE_ORDER if char != current_code[-1])
+            else:
+                next_tree_order = tree_order
+
+            # Internal node, iterate over children
+            for index, child in enumerate(node[1]):
+                # Assign the next character in the tree order to this child
+                if index < len(next_tree_order):
+                    next_char = next_tree_order[index]
+                else:
+                    raise ValueError("Not enough characters in tree order to assign to children.")
+
+                _create_code(child, current_code + next_char, next_tree_order)
+
+            
+        # Start the recursive code generation from the root node
+        root_node = self.priority_queue.top()
+        _create_code(root_node, tree_order=self.TREE_ORDER[:-1])  # Exclude the last character for the first level
+
+        return codes
 
 
 class HuffmanQuaternary(Huffman):
@@ -326,52 +441,9 @@ class HuffmanQuaternary(Huffman):
         super().__init__()
 
         # Each DNA base represents 2 bits, so we set the bit multiplier accordingly
-        self.bit_multiplier = 2  
+        self.VALUE_MULTIPLIER: int = 2
 
-        self.TREE_ORDER: tuple[str, ...] = ('A', 'C', 'G', 'T')
-
-
-    @override
-    def build_tree(self, data: str) -> None:
-        """
-        Builds the Huffman tree for the given data.
-
-        Uses a min heap piriority queue like standard Huffman, but intead merges 4 children at a time instead of 2. This
-        allows for a quaternary tree structure, which is more suitable for encoding data using four symbols 
-        (A, C, G, T).
-
-        Args:
-            data: The input data to build the tree for.
-
-        Raises:
-            ValueError: If the input data is empty or if the Huffman tree cannot be built.
-        """
-        self.priority_queue.build_queue(self.count_frequencies(data))
-
-        # Merged values
-        merged_frequency: int = 0
-        merged_node: tuple
-
-        # We will have four children, so we need to merge four nodes at a time
-        while self.priority_queue.size > 1:
-            # Should have 4 children per
-            children: list[tuple[int, str]] = []
-
-            # Dequeue four nodes with smallest frequencies. If we don't have four, just take what we can
-            for _ in range(4):
-                if not self.priority_queue.is_empty():
-                    children.append(self.priority_queue.dequeue())
-                else:
-                    break
-
-            # Sum up the frequencies
-            for child in children:
-                merged_frequency += child[0]
-
-            # Create a new internal node and put pack onto queue
-            merged_node = (merged_frequency, tuple(children))
-
-            self.priority_queue.enqueue(merged_node)
+        self.CHILDREN: int = 4
 
 
     @override
@@ -380,7 +452,7 @@ class HuffmanQuaternary(Huffman):
         Generates the Huffman codes for each DNA base pair on the constructed quaternary Huffman tree.
 
         Returns:
-            A dictionary mapping each character to its corresponding Huffman code.
+            A dictionary mapping each character to its corresponding Huffman code {character: code}.
 
         Raises:
             ValueError: If the priority queue does not contain exactly one node (the root of the quaternary Huffman).
@@ -409,3 +481,121 @@ class HuffmanQuaternary(Huffman):
         _create_code(root_node)
 
         return codes
+
+
+class HuffmanBitScanQuaternary(HuffmanQuaternary):
+    def __init__(self, k: int = 4) -> None:
+        """
+        Initializes a new instance of the OptimizedQuaternary class.
+
+        Args:
+            k: The length of bits to scan for encoding.
+        """
+        super().__init__()
+
+        # Length of bits to scan
+        self.K: int = k
+
+        # Each character is stored as a bit
+        self.KEY_MULTIPLIER: int = 1
+        # Each value (DNA base) is stored as 2 bits
+        self.VALUE_MULTIPLIER: int = 2
+
+
+    @override
+    def encode(self, data: str) -> tuple[dict[str, str], str]:
+        """
+        Encodes the given data using the generated Huffman codes.
+
+        Args:
+            data: The string to be encoded.
+
+        Returns:
+            A tuple containing the Huffman codes and the encoded data.
+        """
+
+        # Build tree and generate Huffman codes
+        self.build_tree(data, self.K)
+        huffman_codes: dict[str, str] = self.generate_codes()
+        encoded_data: str = ""
+
+        # Encode the data using the generated Huffman codes
+        for i in range(0, len(data) - self.K + 1, self.K):
+            substring: str = data[i:i + self.K]
+            if substring not in huffman_codes:
+                raise ValueError(f"Substring '{substring}' not found in Huffman codes.")
+            encoded_data += huffman_codes[substring]
+
+        # Add remaining characters if the length of the data is not a multiple of k
+        if len(data) % self.K != 0:
+            remaining_substring: str = data[len(data) - (len(data) % self.K):]
+            if remaining_substring not in huffman_codes:
+                raise ValueError(f"Remaining substring '{remaining_substring}' not found in Huffman codes.")
+            encoded_data += huffman_codes[remaining_substring]
+
+        # Return the table and encoded data as or string of encoded data
+        return huffman_codes, encoded_data
+
+
+    def calculate_coding_density(self, huffman_codes: dict[str, str]) -> float:
+        """
+        Calculates the coding density of the encoded data.
+
+        Args:
+            huffman_codes: A dictionary mapping each character to its corresponding Huffman code.
+            encoded_data: The encoded data as a string.
+            original_size: The size of the original data in bits.
+
+        Returns:
+            The coding density as a float.
+        """
+        total_code_length: int = sum(len(code) for code in huffman_codes.values())
+        average_code_length: float = total_code_length / len(huffman_codes)
+        
+        coding_density: float = self.K / average_code_length
+        return coding_density
+
+
+    def find_optimal_k(self, in_path: str, min_k: int = 4, max_k: int = 52) -> tuple[int, float, dict[str, str], str]:
+        """
+        Finds the optimal value of k that maximizes the coding density for the given data, and sets the class's K 
+        attribute to that value.
+
+        Args:
+            in_path: The path to the input file.
+            min_k: The minimum value of k to consider. Default is 4.
+            max_k: The maximum value of k to consider. Default is 16.
+
+        Returns:
+            A tuple containing the optimal value of k, the maximum coding density, the best Huffman codes, and the 
+            best encoded data.
+
+        Raises:
+            ValueError: If the input data is empty or if min_k is greater than max_k
+        """
+        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
+            data: str = f.read()
+
+        optimal_k: int = min_k
+        max_density: float = 0.0
+
+        if min_k > max_k:
+            raise ValueError("min_k cannot be greater than max_k.")
+
+        for k in range(min_k, max_k + 1):
+            self.K = k
+            huffman_codes, encoded_data = self.encode(data)
+            density: float = self.calculate_coding_density(huffman_codes)
+
+            if density > max_density:
+                max_density = density
+                optimal_k = k
+                best_huffman_codes = huffman_codes
+                best_encoded_data = encoded_data
+
+        return optimal_k, max_density, best_huffman_codes, best_encoded_data
+
+
+    def print_info(self, encoded_data: str, original_size: int, k: int = 3) -> None:
+        super().print_info(encoded_data, original_size, k)
+        print(f"\tK Used: {self.K}")

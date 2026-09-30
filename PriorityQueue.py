@@ -4,8 +4,9 @@ PriorityQueue.py
 A priority queue implementation using a min-heap, used for building Huffman tree. Stores tuples of 
 (frequency, character) to facilitate the Huffman encoding process.
 """
+
+
 class PriorityQueue:
-    
     def __init__(self) -> None:
         """
         Initializes an empty priority queue.

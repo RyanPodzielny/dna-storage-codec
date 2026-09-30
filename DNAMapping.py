@@ -16,38 +16,7 @@ class DNAMap(Encoding):
         super().__init__()
 
         # Each DNA base represents 2 bits, so we set the bit multiplier accordingly
-        self.bit_multiplier = 2
-
-
-    def binary_to_ascii(self, binary_string: str) -> str:
-        """
-        Converts a binary string to an ASCII string.
-
-        Args:
-            binary_string: The binary string to be converted.
-
-        Returns:
-            An ASCII string representation of the binary string.
-        """
-        ascii_string: str = ""
-        for i in range(0, len(binary_string), 8):
-            byte: str = binary_string[i:i+8]
-            ascii_string += chr(int(byte, 2))
-        return ascii_string
-
-
-    def ascii_to_binary(self, ascii_string: str) -> str:
-        """
-        Converts an ASCII string to a binary string.
-
-        Args:
-            ascii_string: The ASCII string to be converted.
-
-        Returns:
-            A binary string representation of the ASCII string.
-        """
-        return ''.join(format(ord(char), '08b') for char in ascii_string)
-
+        self.BIT_MULTIPLIER = 2
 
     @override
     def encode(self, binary_string: str) -> tuple[bool, str]:
@@ -84,26 +53,29 @@ class DNAMap(Encoding):
 
 
     @override
-    def encode_from_file(self, in_path: str, out_path: str) -> str:
+    def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
         """
         Encodes a binary string from a file into a DNA sequence and writes it to another file.
 
         Args:
             in_path: The path to the input file containing the raw text.
             out_path: The path to the output file where the DNA sequence will be written.
+            as_binary: A boolean indicating whether the input file is already in binary format. Default is True.
 
         Returns:
             The encoded DNA sequence.
 
         Raises:
             FileNotFoundError: If the input file does not exist.
+            ValueError: If the input file is empty or if the binary string is empty.
         """
         # Read the original final
         with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
             raw_text: str = f.read()
 
         # Convert the raw text to a binary string
-        binary_string: str = self.ascii_to_binary(raw_text)
+        if not as_binary:
+            binary_string: str = self.ascii_to_binary(raw_text)
 
         # Check if the binary string is empty
         if not binary_string:
@@ -150,7 +122,7 @@ class DNAMap(Encoding):
 
 
     @override
-    def decode_to_file(self, in_path: str, out_path: str) -> str: 
+    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = True) -> str: 
         """
         Decodes a DNA sequence from a file back to a binary string and writes it to another file.
 
@@ -218,8 +190,8 @@ class DNAMap(Encoding):
             huffman_codes: dict[str, str] = Huffman().format_table(table_part)
 
             # Each character is 8 bits, plus the length of the code
-            for _, code in huffman_codes.items():
-                table_size += 8 + len(code)  
+            for code, char in huffman_codes.items():
+                table_size += 8 + len(code)
         # In dna mapping
         elif len(parts) == 2:
             pass
@@ -227,7 +199,7 @@ class DNAMap(Encoding):
             raise ValueError("Invalid input format. Expected a separator between table and encoded data.")
 
         # Each DNA base represents 2 bits
-        encoded_size = len(parts[0].strip()) * self.bit_multiplier
+        encoded_size = len(parts[0].strip()) * self.BIT_MULTIPLIER
 
         # 1 bit for padding stored with table
         return (encoded_size, table_size + 1)
@@ -242,7 +214,7 @@ class DNAMapHuffman(DNAMap):
 
 
     @override
-    def encode_from_file(self, in_path: str, out_path: str) -> str:
+    def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
         """
         Encodes a binary string from a file into a DNA sequence and writes it to another file.
 
@@ -250,6 +222,7 @@ class DNAMapHuffman(DNAMap):
             in_path: The path to the input file containing the binary string.
             out_path: The path to the output file where the DNA sequence will be written.
             is_huffman: A flag indicating whether Huffman coding is used.
+
 
         Returns:
             The encoded DNA sequence with tabel.
@@ -260,7 +233,13 @@ class DNAMapHuffman(DNAMap):
         """
         # Read the binary string from the input file
         with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
-            binary_string: str = f.read()
+            data: str = f.read()
+            binary_string: str = data.strip()
+
+            # Should already be in binary
+            if as_binary:
+                binary_string = self.ascii_to_binary(binary_string)
+
 
             # Split the table and encoded data
             parts: list[str] = binary_string.split(self.SEPARATOR)
@@ -290,7 +269,7 @@ class DNAMapHuffman(DNAMap):
 
 
     @override
-    def decode_to_file(self, in_path: str, out_path: str) -> str: 
+    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str: 
         """
         Decodes a DNA sequence from a file back to a binary string and writes it to another file.
 
@@ -330,6 +309,11 @@ class DNAMapHuffman(DNAMap):
 
         # Decode the DNA string back to binary then decode binary back to original
         binary_string: str = self.decode(dna_string, has_padding)
+        
+        # Should already be in binary, but if not, convert to binary first
+        if as_binary:
+            binary_string = self.binary_to_ascii(binary_string)
+
         decoded_data: str = Huffman().decode(binary_string, huffman_codes)
 
         # Write the decoded data to the output file
