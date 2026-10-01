@@ -222,8 +222,8 @@ class Huffman(Encoding):
         # Remove any trailing whitespace or newlines
         raw_table.rstrip()
 
-        char: str
-        code: str
+        char: str = ""
+        code: str = ""
 
         is_newline: bool = False
         # Need to keep track of newline characters
@@ -257,17 +257,22 @@ class Huffman(Encoding):
         return huffman_codes
 
 
-    def decode(self, encoded_data: str, huffman_codes: dict[str, str]) -> str:
+    def decode(self, encoded_data: str, huffman_codes: dict[str, str], reverse: bool = False) -> str:
         """
         Decodes the encoded data using the provided Huffman codes.
 
         Args:
             encoded_data: The encoded data to be decoded.
             huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
-
+            reverse: A boolean indicating whether to reverse the Huffman codes for decoding.
+            
         Returns:
             The decoded data as a string.
         """
+        # Reverse codes if needed (mostly for testing purposes)
+        if reverse:
+            huffman_codes = {v: k for k, v in huffman_codes.items()}
+
         # Decode the encoded data
         decoded_data: str = ""
         current_code: str = ""
@@ -370,7 +375,7 @@ class Huffman(Encoding):
         return table_size
 
 
-class HuffmanTrenary(Huffman):
+class Trenary(Huffman):
     def __init__(self) -> None:
         """
         Initializes a new instance of the HuffmanTrenary class.
@@ -430,7 +435,7 @@ class HuffmanTrenary(Huffman):
         return codes
 
 
-class HuffmanQuaternary(Huffman):
+class Quaternary(Huffman):
     def __init__(self) -> None:
         """
         Initializes a new instance of the HuffmanQuaternary class.
@@ -483,7 +488,7 @@ class HuffmanQuaternary(Huffman):
         return codes
 
 
-class HuffmanBitScanQuaternary(HuffmanQuaternary):
+class BitScanQuaternary(Quaternary):
     def __init__(self, k: int = 4) -> None:
         """
         Initializes a new instance of the OptimizedQuaternary class.
@@ -599,3 +604,132 @@ class HuffmanBitScanQuaternary(HuffmanQuaternary):
     def print_info(self, encoded_data: str, original_size: int, k: int = 3) -> None:
         super().print_info(encoded_data, original_size, k)
         print(f"\tK Used: {self.K}")
+
+
+class Pgram(Huffman):
+    def __init__(self, m: int = 3) -> None:
+        """
+        Initializes a new instance of the Pgram class.
+
+        Args:
+            m: The maximum length of p-grams to consider for encoding
+        """
+        super().__init__()
+
+        # Max length of pgram
+        self.M = m  
+
+
+    @override
+    def count_frequencies(self, data: str, a: int = 3) -> dict[str, int]:
+        """
+        Counts the frequency of each k-gram (substring of length k) in the input data.
+
+        Args:
+            data: The input data to count k-gram frequencies for.
+            a: The scaling factor for the pgram length. Higher lengths will be scaled higher.
+
+        Returns:
+            A dictionary mapping each k-gram to its frequency in the input data.
+        """
+
+        frequencies: dict[str, int] = {}
+
+        # Length of the code word we are scanning for
+        clength: int = 1
+        # Position in the data 
+        index: int = 0
+
+        # For every possible length of pgram, count the frequencies of all substrings of that length
+        for clength in range(self.M + 1):
+            # At every position, record the substring of the current length and scle
+            index = 0
+            for index in range(len(data) - clength + 1):
+                substring: str = data[index:index + clength]
+                # Scaling used is 10 ^ (code_length - 1) from:
+                #   https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=11079985
+                if substring not in frequencies:
+                    frequencies[substring] = clength * (a ** (clength - 1))
+                else:
+                    frequencies[substring] += clength * (a ** (clength - 1))
+
+        return frequencies
+
+
+    def build_optimal_coding(self, data: str, huffman_codes: dict[str, str]) -> str:
+        """
+        Builds the optimal coding for the given data using p-gram encoding. Essentially, for every position in the data,
+        we find the substring of length 1 to M that has the best ratio of length of substring to length of code. 
+        We then append the code for that substring to the encoded message.
+
+        Args:
+            data: The input data to be encoded.
+
+        Returns:
+            The encoded data as a string.
+        """
+
+        coded_message: str = ""
+        index: int = 0
+
+        # For every pos in data, find the substring of length 1 to M that has best ration 
+        while index < len(data):
+            # Reset ratio and substring length for this position
+            ratio: float = 0
+            substring_length: int = 0
+
+            # Find the best substring for this position
+            for clength in range(1, self.M + 1):
+                # If the substring length goes beyond the data length, stop checking for longer substrings
+                if index + clength > len(data):
+                    break
+
+                # Get the substring
+                substring: str = data[index:index + clength]
+                # Get the code for the substring
+                code: str = huffman_codes[substring]
+                # Calculate the ratio of length of substring to length of code
+                current_ratio: float = len(substring) / len(code)
+
+                # See if we have new best
+                if current_ratio > ratio:
+                    ratio = current_ratio
+                    substring_length = clength
+
+            # Append the code for the best substring to the encoded message
+            coded_message += huffman_codes[data[index:index + substring_length]]
+            index += substring_length
+
+        return coded_message
+
+
+    def encode(self, data: str) -> tuple[str, dict[str, str]]:
+        """
+        Finds the optimal coding for the given data using p-gram encoding.
+
+        Args:
+            data: The input data to be encoded.
+            frequencies: A dictionary mapping each p-gram to its frequency in the input data.
+
+        Returns:
+            A tuple containing the Huffman codes and the encoded data.
+        """
+
+        self.build_tree(data)
+        huffman_codes: dict[str, str] = self.generate_codes()
+        coded_message: str = self.build_optimal_coding(data, huffman_codes)
+        return coded_message, huffman_codes
+
+
+"""
+TESTING
+"""
+test = Pgram(8) 
+with open("Testing/Original/canterbury/alice29.txt", 'r', encoding='utf-8', errors='ignore') as f:
+    data = f.read()
+
+encoded_message, huffman_codes = test.encode(data)
+decoded_message = test.decode(encoded_message, huffman_codes, reverse=True)
+print(f"Match: {data == decoded_message}")
+print(f"Original Size: {len(data) * 8} bits")
+print(f"Encoded Size: {len(encoded_message)} bits")

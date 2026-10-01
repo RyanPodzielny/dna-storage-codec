@@ -4,7 +4,7 @@ This module contains functions to test the encoding and decoding of files using 
 
 import os
 from Encoding import Encoding
-from HuffmanCoding import Huffman, HuffmanBitScanQuaternary, HuffmanQuaternary, HuffmanTrenary
+from HuffmanCoding import Huffman, BitScanQuaternary, Quaternary, Trenary
 from DNAMapping import DNAMap, DNAMapHuffman
 
 def check_match(original_file: str, decoded_file: str) -> bool:
@@ -101,12 +101,12 @@ def test_file(original_dir: str, encoded_dir: str, decoded_dir: str, file_name: 
 
     # Test Huffmans
     huffman_encoded_path: str = test_encoding(origin, file_encoded_dir, file_decoded_dir, Huffman(), original_size)
-    test_encoding(origin, file_encoded_dir, file_decoded_dir, HuffmanQuaternary(), original_size)
-    test_encoding(origin, file_encoded_dir, file_decoded_dir, HuffmanTrenary(), original_size)
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, Quaternary(), original_size)
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, Trenary(), original_size)
 
-    # Find optimal k for HuffmanBitScanQuaternary and test encoding/decoding
-    optimal_k: int = HuffmanBitScanQuaternary().find_optimal_k(origin)[0]
-    test_encoding(origin, file_encoded_dir, file_decoded_dir, HuffmanBitScanQuaternary(k=optimal_k), original_size, 
+    # Find optimal k for BitScanQuaternary and test encoding/decoding
+    optimal_k: int = BitScanQuaternary().find_optimal_k(origin)[0]
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, BitScanQuaternary(k=optimal_k), original_size, 
                   as_binary=True)
 
     # Before testing DNA mapping, ensure that the Huffman encoded file exists
