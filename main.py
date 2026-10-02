@@ -3,6 +3,8 @@ This module contains functions to test the encoding and decoding of files using 
 """
 
 import os
+import sys
+from datetime import datetime
 from Encoding import Encoding
 from HuffmanCoding import Huffman, BitScanQuaternary, Pgram, Quaternary, Trenary
 from DNAMapping import DNAMap, DNAMapHuffman
@@ -53,17 +55,17 @@ def test_encoding(in_path: str, encoded_dir: str, decoded_dir: str, encoding: En
         origin_path = in_path
 
     # Create the encoded and decoded paths
-    encoded_path: str = os.path.join(encoded_dir, encoding.__class__.__name__ + "_encoded.txt")
+    encoded_path: str = os.path.join(encoded_dir, encoding.__class__.__name__ + "_encoded.json")
     decoded_path: str = os.path.join(decoded_dir, encoding.__class__.__name__ + "_decoded.txt")
 
-    encoded_data = encoding.encode_from_file(in_path, encoded_path, as_binary=as_binary)
+    encoding.encode_from_file(in_path, encoded_path, as_binary=as_binary)
     encoding.decode_to_file(encoded_path, decoded_path, as_binary=as_binary)
 
     # Check if both match
     if not check_match(origin_path, decoded_path):
         raise ValueError(f"Encoding and decoding failed for {in_path} in {encoding.__class__.__name__}.")
 
-    encoding.print_info(encoded_data, original_size)
+    encoding.print_info(encoded_path, original_size)
 
     return encoded_path
 
@@ -99,7 +101,7 @@ def test_file(original_dir: str, encoded_dir: str, decoded_dir: str, file_name: 
     original_size: int = os.path.getsize(origin) * 8  
     print(f"File: {file_name} - Original Size: {original_size} bits")
 
-    # Test Huffmans
+    """Test Huffmans"""
     huffman_encoded_path: str = test_encoding(origin, file_encoded_dir, file_decoded_dir, Huffman(), original_size)
     test_encoding(origin, file_encoded_dir, file_decoded_dir, Quaternary(), original_size)
     test_encoding(origin, file_encoded_dir, file_decoded_dir, Trenary(), original_size)
@@ -109,11 +111,13 @@ def test_file(original_dir: str, encoded_dir: str, decoded_dir: str, file_name: 
     test_encoding(origin, file_encoded_dir, file_decoded_dir, BitScanQuaternary(k=optimal_k), original_size, 
                   as_binary=True)
 
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, Pgram(8), original_size)
+
+    """ Test DNA mapping"""
     # Before testing DNA mapping, ensure that the Huffman encoded file exists
     if not os.path.exists(huffman_encoded_path):
         raise FileNotFoundError(f"Huffman encoded file {huffman_encoded_path} doesn't exist. Please run Huffman first.")
 
-    # Test mapping
     test_encoding(origin, file_encoded_dir, file_decoded_dir, DNAMap(), original_size)
     test_encoding(huffman_encoded_path, file_encoded_dir, file_decoded_dir, DNAMapHuffman(), 
                   original_size, origin_path=origin)
@@ -160,16 +164,60 @@ def test_directory(dir: str) -> None:
 
         test_file(original_dir, encoded_dir, decoded_dir, file_name)
 
+"""
+Simple logging to both console and file. Very bare bones, meant for testing.
+"""
+class Tee:
+    def __init__(self, *files):
+        self.files = files
+
+    def write(self, text):
+        for file in self.files:
+            file.write(text)
+            file.flush()
+
+    def flush(self):
+        for file in self.files:
+            file.flush()
+
 
 def main() -> None:
     """
-    Main function to run tests on the encoding and decoding of files in the specified directories.
+    Main function to run tests on the encoding and decoding of files in the specified directories and saves the 
+    results to a timestamped text file in the Testing/Results directory.
 
     Returns:
         None
     """
-    # Test the directories
-    test_directory("canterbury")
+    # Make the dir
+    results_dir: str = os.path.join("Testing", "Results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    date_format: str = "%Y-%m-%d_%H:%M:%S"
+
+    # Make file name timestampped
+    start: str = datetime.now().strftime(date_format)
+    output_file: str = os.path.join(results_dir, f"Results-{start}.txt")
+    with open(output_file, 'w', encoding='utf-8') as result_file:
+        # Print both to console and to the file
+        sys.stdout = Tee(sys.stdout, result_file)
+
+        try:
+            # Run the tests again to capture the output in the file
+            test_directory("canterbury")
+
+            # Add time information to the output file
+            end: str = datetime.now().strftime(date_format)
+            print(f"Start time: {start}")
+            print(f"End time: {end}")
+
+            # Show total time in seconds 
+            time = (datetime.strptime(end, date_format) - datetime.strptime(start, date_format)).total_seconds()
+            print(f"Total time (seconds): {time}")
+        finally:
+            # Reset stdout to default
+            sys.stdout = sys.__stdout__
+            print(f"Results saved to {output_file}")
 
 
 if __name__ == "__main__":

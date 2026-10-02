@@ -6,7 +6,8 @@ strings. It also includes methods for encoding and decoding files, as well as ca
 Uses both standard DNA mapping and Huffman coding for compression.
 """
 
-from typing import override
+import json
+from typing import Any, override
 from Encoding import Encoding
 from HuffmanCoding import Huffman
 
@@ -19,7 +20,27 @@ class DNAMap(Encoding):
         self.BIT_MULTIPLIER = 2
 
     @override
-    def encode(self, binary_string: str) -> tuple[bool, str]:
+    def read_json_table(self, json_path: str) -> tuple[str, bool]:
+        """
+        Reads the encoded data and padding information from a JSON file.
+
+        Args:
+            json_path: The path to the input JSON file containing the encoded data and padding information.
+
+        Returns:
+            A tuple containing the encoded DNA sequence and a boolean indicating whether padding was added during 
+            encoding.
+
+        Raises:
+            FileNotFoundError: If the input JSON file does not exist.
+            ValueError: If the JSON file is empty or does not contain the expected keys.
+        """
+        json: dict[str, Any] = Encoding.read_json_table(json_path)
+        return json[Encoding.ENCODED_DATA], json[Encoding.HAS_PADDING]
+
+        
+    @override
+    def encode(self, binary_string: str) -> tuple[str, bool]:
         """
         Encodes a binary string into a DNA sequence.
 
@@ -49,17 +70,17 @@ class DNAMap(Encoding):
             pair: str = binary_string[index:index+2]
             dna_string += self.DNA_MAP[pair]
 
-        return has_padding, dna_string
+        return dna_string, has_padding
 
 
     @override
-    def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
+    def encode_from_file(self, in_path: str, json_outpath: str, as_binary: bool = False) -> str:
         """
         Encodes a binary string from a file into a DNA sequence and writes it to another file.
 
         Args:
             in_path: The path to the input file containing the raw text.
-            out_path: The path to the output file where the DNA sequence will be written.
+            json_outpath: The path to the output JSON file where the encoded data will be written.
             as_binary: A boolean indicating whether the input file is already in binary format. Default is True.
 
         Returns:
@@ -70,8 +91,8 @@ class DNAMap(Encoding):
             ValueError: If the input file is empty or if the binary string is empty.
         """
         # Read the original final
-        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
-            raw_text: str = f.read()
+        with open(in_path, 'r', encoding='utf-8', errors='ignore') as input_file:
+            raw_text: str = input_file.read()
 
         # Convert the raw text to a binary string
         if not as_binary:
@@ -82,19 +103,13 @@ class DNAMap(Encoding):
             raise ValueError("Input file is empty.")
 
         # Encode the binary string to DNA
-        has_padding: bool 
-        dna_string: str 
-        has_padding, dna_string = self.encode(binary_string)
+        dna_string: str
+        has_padding: bool
+        dna_string, has_padding = self.encode(binary_string)
 
-        # Format the output to include the DNA string, the Huffman table (if applicable), and the padding indicator
-        output: str = dna_string + "\n"
-        output += self.SEPARATOR + ("1" if has_padding else "0")
+        self.save_json_table(json_outpath, dna_string, has_padding=has_padding)
 
-        # Write the DNA string to the output file
-        with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
-            f.write(output)
-
-        return output
+        return dna_string
 
 
     @override
@@ -122,41 +137,24 @@ class DNAMap(Encoding):
 
 
     @override
-    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = True) -> str: 
+    def decode_to_file(self, json_path: str, out_path: str, as_binary: bool = True) -> str: 
         """
         Decodes a DNA sequence from a file back to a binary string and writes it to another file.
 
         Args:
-            in_path: The path to the input file containing the DNA sequence.
+            json_path: The path to the input JSON file containing the encoded DNA sequence and padding information.
             out_path: The path to the output file where the decoded binary string will be written.
 
         Returns:
             The decoded binary string.
         """
         dna_string: str = ""
-        raw_padding: str = ""
-
-        # Read the DNA string from the input file
-        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
-            data: str = f.read()
-            parts: list[str] = data.split(self.SEPARATOR)
-
-            # Something went wrong
-            if len(parts) != 2:
-                raise ValueError("Invalid input format. Expected a separator between table and encoded data.")
-
-        # Padding is always last
-        dna_string = parts[0].strip()
-        raw_padding: str = parts[-1].strip()
-
-        # Make sure the padding indicator is valid
-        if raw_padding not in {"0", "1"}:
-            raise ValueError("Invalid padding indicator. Expected '0' or '1'.")
-        has_padding: bool = raw_padding == "1"
+        has_padding: bool
+        dna_string, has_padding = self.read_json_table(json_path)
 
         # Decode the DNA string back to binary and then to ASCII
         binary_string: str = self.decode(dna_string, has_padding)
-        decoded_data: str = self.binary_to_ascii(binary_string)
+        decoded_data: str = Encoding.binary_to_ascii(binary_string)
 
         # Write the decoded data to the output file
         with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
@@ -166,12 +164,12 @@ class DNAMap(Encoding):
 
 
     @override
-    def calculate_size(self, encoded_data: str) -> tuple[int, int]:
+    def calculate_size(self, json_path: str) -> tuple[int, int]:
         """
         Calculates the size of the encoded data in bits.
 
         Args:
-            encoded_data: The encoded data as a string.
+            json_path: The path to the JSON file containing the encoded data.
 
         Returns:
             The size of the encoded data in bits and the size of the table in bits.
@@ -182,24 +180,12 @@ class DNAMap(Encoding):
         encoded_size: int = 0
         table_size: int = 0
 
-        parts: list[str] = encoded_data.split(self.SEPARATOR)
-
-        # In huffman
-        if len(parts) == 3:
-            table_part: str = parts[1].rstrip()
-            huffman_codes: dict[str, str] = Huffman().format_table(table_part)
-
-            # Each character is 8 bits, plus the length of the code
-            for code, char in huffman_codes.items():
-                table_size += 8 + len(code)
-        # In dna mapping
-        elif len(parts) == 2:
-            pass
-        else:
-            raise ValueError("Invalid input format. Expected a separator between table and encoded data.")
+        dna_string: str = ""
+        has_padding: bool
+        dna_string, has_padding = self.read_json_table(json_path)
 
         # Each DNA base represents 2 bits
-        encoded_size = len(parts[0].strip()) * self.BIT_MULTIPLIER
+        encoded_size = len(dna_string.strip()) * self.BIT_MULTIPLIER
 
         # 1 bit for padding stored with table
         return (encoded_size, table_size + 1)
@@ -214,15 +200,34 @@ class DNAMapHuffman(DNAMap):
 
 
     @override
-    def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
+    def read_json_table(self, json_path: str) -> tuple[str, bool, dict[str, str]]:
+        """
+        Reads the encoded data, padding information, and Huffman codes from a JSON file.
+
+        Args:
+            json_path: The path to the input JSON file containing the encoded data, padding information, and Huffman codes.
+
+        Returns:
+            A tuple containing the encoded DNA sequence, a boolean indicating whether padding was added during encoding,
+            and a dictionary of Huffman codes.
+
+        Raises:
+            FileNotFoundError: If the input JSON file does not exist.
+            ValueError: If the JSON file is empty or does not contain the expected keys.
+        """
+        json: dict[str, Any] = Encoding.read_json_table(json_path)
+        return json[Encoding.ENCODED_DATA], json[Encoding.HAS_PADDING], json[Encoding.HUFFMAN_CODES]
+
+
+    @override
+    def encode_from_file(self, json_path: str, out_path: str, as_binary: bool = False) -> str:
         """
         Encodes a binary string from a file into a DNA sequence and writes it to another file.
 
         Args:
-            in_path: The path to the input file containing the binary string.
+            json_path: The path to the input file containing the binary string.
             out_path: The path to the output file where the DNA sequence will be written.
-            is_huffman: A flag indicating whether Huffman coding is used.
-
+            as_binary: A boolean indicating whether to convert to binary after reading
 
         Returns:
             The encoded DNA sequence with tabel.
@@ -231,50 +236,29 @@ class DNAMapHuffman(DNAMap):
             ValueError: If the input file is empty or if the binary string is empty.
             FileNotFoundError: If the input file does not exist.
         """
-        # Read the binary string from the input file
-        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
-            data: str = f.read()
-            binary_string: str = data.strip()
 
-            # Should already be in binary
-            if as_binary:
-                binary_string = self.ascii_to_binary(binary_string)
-
-
-            # Split the table and encoded data
-            parts: list[str] = binary_string.split(self.SEPARATOR)
-            if len(parts) != 2:
-                raise ValueError("Invalid input format. Expected a separator between table and encoded data.")
-
-            # Get the data itself
-            binary_string = parts[0].strip()
-            # Get the table - will remain untouched, think of it as metadata
-            raw_table: str = parts[1].rstrip()
-
-        # Encode the binary string to DNA
+        binary_string: str 
         has_padding: bool 
-        dna_string: str 
-        has_padding, dna_string = self.encode(binary_string)
+        huffman_codes: dict[str, str] | None
+        binary_string, _, huffman_codes = self.read_json_table(json_path)
 
-        # Format the output to include the DNA string, the Huffman table (if applicable), and the padding indicator
-        output: str = dna_string + "\n"
-        output += self.SEPARATOR + raw_table + "\n"
-        output += self.SEPARATOR + ("1" if has_padding else "0")
+        if as_binary:
+            binary_string = Encoding.ascii_to_binary(binary_string)
 
-        # Write the DNA string to the output file
-        with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
-            f.write(output)
+        dna_string, has_padding = self.encode(binary_string)
 
-        return output
+        self.save_json_table(out_path, dna_string, huffman_codes, has_padding)
+
+        return dna_string
 
 
     @override
-    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str: 
+    def decode_to_file(self, json_path: str, out_path: str, as_binary: bool = False) -> str: 
         """
         Decodes a DNA sequence from a file back to a binary string and writes it to another file.
 
         Args:
-            in_path: The path to the input file containing the DNA sequence.
+            json_path: The path to the input file containing the DNA sequence.
             out_path: The path to the output file where the decoded binary string will be written.
 
         Returns:
@@ -285,34 +269,17 @@ class DNAMapHuffman(DNAMap):
             FileNotFoundError: If the input file does not exist.
         """
         # Read the DNA string from the input file
-        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
-            data: str = f.read()
-            parts: list[str] = data.split(self.SEPARATOR)
-
-            # Had table, means is in huffman format
-            if len(parts) != 3:
-                raise ValueError("Invalid input format. Expected a separator between table and encoded data.")
-
-        dna_string: str = parts[0].strip()
-        raw_table: str = parts[1].rstrip()
-        raw_padding: str = parts[-1].strip()
-
-        # Make sure the padding indicator is valid
-        if raw_padding not in {"0", "1"}:
-            raise ValueError("Invalid padding indicator. Expected '0' or '1'.")
-        has_padding: bool = raw_padding == "1"
-
-        # Format our table and ensure its proper
-        huffman_codes: dict[str, str] = Huffman().format_table(raw_table)
-        if raw_table and not huffman_codes:
-            raise ValueError("Invalid table format. Could not parse the Huffman table.")
+        dna_string: str
+        has_padding: bool
+        huffman_codes: dict[str, str]
+        dna_string, has_padding, huffman_codes = self.read_json_table(json_path)
 
         # Decode the DNA string back to binary then decode binary back to original
         binary_string: str = self.decode(dna_string, has_padding)
         
         # Should already be in binary, but if not, convert to binary first
         if as_binary:
-            binary_string = self.binary_to_ascii(binary_string)
+            binary_string = Encoding.binary_to_ascii(binary_string)
 
         decoded_data: str = Huffman().decode(binary_string, huffman_codes)
 
@@ -321,3 +288,17 @@ class DNAMapHuffman(DNAMap):
             f.write(decoded_data)
 
         return decoded_data
+
+
+    @override
+    def calculate_size(self, json_path: str) -> tuple[int, int]:
+        """
+        Calculates the size of the encoded data in bits.
+
+        Args:
+            json_path: The path to the JSON file containing the encoded data.
+
+        Returns:
+            The size of the encoded data in bits and the size of the table in bits.
+        """
+        return Huffman().calculate_size(json_path)

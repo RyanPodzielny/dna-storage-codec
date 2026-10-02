@@ -8,8 +8,9 @@ purely a theoretical implementation, storing the Huffman table and encoded data 
 be stored differently in a real application.
 """
 
-import re
+import json
 from typing import override
+from sqlalchemy import values
 from Encoding import Encoding
 from PriorityQueue import PriorityQueue
 
@@ -148,8 +149,8 @@ class Huffman(Encoding):
         _create_code(root_node)
 
         return codes
-    
 
+    
     def encode(self, data: str) -> tuple[dict[str, str], str]:
         """
         Encodes the given data using the generated Huffman codes.
@@ -177,6 +178,7 @@ class Huffman(Encoding):
         Args:
             in_path: Path to the input file containing the data to be encoded.
             out_path: Path to the output file where the encoded data and Huffman table will be written.
+            as_binary: A boolean indicating whether to convert the original file to binary before encoding.
 
         Returns:
             The encoded data as a string.
@@ -188,77 +190,35 @@ class Huffman(Encoding):
         with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
             data: str = f.read()
             if as_binary:
-                data = Encoding().ascii_to_binary(data)
-        
+                data = Encoding.ascii_to_binary(data)
+
+        encoded_data: str
+        huffman_codes: dict[str, str]
+
         # Get the Huffman codes and encoded data
         huffman_codes, encoded_data = self.encode(data)
 
-        # Record the separator to separate the table and encoded data
-        # Note: This is a theoretical implementation and purely used to showcase the concep
-        output: str = encoded_data + "\n" + self.SEPARATOR
-        # Then the table
-        output += "\n".join(f"{char}:{code}" for char, code in huffman_codes.items())
+        # Save the encoded data and Huffman table to the output file
+        self.save_json_table(out_path, encoded_data, huffman_codes)
 
-        # Write the table and encoded data to the output file
-        with open(out_path, 'w') as f:
-            f.write(output)
-
-        return output
+        return encoded_data
 
 
-    def format_table(self, raw_table: str) -> dict[str, str]:
+    def read_json_table(self, json_path: str) -> tuple[str, dict[str, str]]:
         """
         Formats the raw Huffman table string into a dictionary mapping codes to characters.
 
         Args:
-            raw_table: The raw Huffman table string read from the encoded file.
+            json_path: The path to the JSON file containing the Huffman table.
 
         Returns:
             A dictionary mapping Huffman codes to their corresponding characters.
         """
-
-        # Initialize an empty dictionary to hold the formatted table
-        huffman_codes: dict[str, str] = {}
-
-        # Remove any trailing whitespace or newlines
-        raw_table.rstrip()
-
-        char: str = ""
-        code: str = ""
-
-        is_newline: bool = False
-        # Need to keep track of newline characters
-        for line in raw_table.splitlines():
-            # Empty line means we split on newline
-            if line == "":
-                is_newline = True
-                continue
-
-            # Split on the first occurrence only
-            char, code = line.split(self.KEY_VALUE_SEPARATOR, 1)
-
-            # If the code starts with a colon, means character is colon
-            if code.startswith(self.KEY_VALUE_SEPARATOR):
-                char = self.KEY_VALUE_SEPARATOR
-                code = code[1:]  # Remove the leading colon from the code
-
-            # Ensure we record the newline character when found
-            if is_newline:
-                char = "\n"
-                # Skip the first character which is the newline
-                code = line[1:]  
-                is_newline = False
-
-            if char is None or code is None:
-                raise ValueError("Invalid Huffman table format. Each line should be in the format 'char:code'.")
-
-            # Stores it in reverse so we can decode it later easier
-            huffman_codes[code] = char
-
-        return huffman_codes
+        json_data = super().read_json_table(json_path)
+        return json_data[Encoding.ENCODED_DATA], json_data[Encoding.HUFFMAN_CODES], 
 
 
-    def decode(self, encoded_data: str, huffman_codes: dict[str, str], reverse: bool = False) -> str:
+    def decode(self, encoded_data: str, huffman_codes: dict[str, str], reverse: bool = True) -> str:
         """
         Decodes the encoded data using the provided Huffman codes.
 
@@ -270,7 +230,6 @@ class Huffman(Encoding):
         Returns:
             The decoded data as a string.
         """
-        # Reverse codes if needed (mostly for testing purposes)
         if reverse:
             huffman_codes = {v: k for k, v in huffman_codes.items()}
 
@@ -290,69 +249,58 @@ class Huffman(Encoding):
         return decoded_data
 
 
-
     def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
         """
         Decodes the encoded data from a file and writes the result to another file.
 
         Args:
-            in_path: The path to the input file containing the encoded data.
+            in_path: The path to the input json file containing the encoded data and Huffman table.
             out_path: The path to the output file where the decoded data will be written.
 
         Returns:
             The decoded data as a string.
-
-        Raises:
-            FileNotFoundError: If the input file does not exist.
-            ValueError: If the input file format is invalid or if the Huffman table cannot be parsed.
         """
-        # Parse encoded data and table from the input file
-        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
-            data: str = f.read().strip()
-
-        # Split the data into the table and encoded data
-        values: list[str] = data.split(self.SEPARATOR)
-        if len(values) < 2:
-            raise ValueError("Invalid input format. Expected a separator between table and encoded data.")
-
         # Enocoded data is first
-        encoded_data: str = values[0]
-        huffman_codes: dict[str, str] = self.format_table(values[1])
+        encoded_data: str 
+        huffman_codes: dict[str, str]
 
+        # Parse encoded data and table from the input file
+        encoded_data, huffman_codes = self.read_json_table(in_path)
+        
         # Now decode the data using the table
         decoded_data: str = self.decode(encoded_data, huffman_codes)
+
+        # See if we need to convert to binary
         if as_binary:
-            decoded_data = Encoding().binary_to_ascii(decoded_data)
+            decoded_data = Encoding.binary_to_ascii(decoded_data)
+        
         with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
             f.write(decoded_data)
 
         return decoded_data
 
 
-    def calculate_size(self, encoded_data: str) -> tuple[int, int]:
+    def calculate_size(self, json_path: str) -> tuple[int, int]:
         """
         Calculates the size of the encoded data and table in bits.
 
         Args:
-            encoded_data: The encoded data as a string of bits.
+            json_path: The path to the input JSON file containing the encoded data and Huffman table.
 
         Returns:
             A tuple of the size of the encoded data in bits and size of the table in bits.
-
-        Raises:
-            ValueError: If the encoded data is not a valid binary string.
         """
-        # Split the encoded data and table
-        values: list[str] = encoded_data.split(self.SEPARATOR)
-        if len(values) != 2:
-            raise ValueError("Invalid encoded data format. Expected a separator between table and encoded data.")
+        encoded_data: str
+        huffman_codes: dict[str, str]
+        
+        # Read the encoded data and Huffman table from the JSON file
+        encoded_data, huffman_codes = self.read_json_table(json_path)
 
         # Calculate the size of the encoded data in bits
-        encoded_bits = len(values[0]) * self.VALUE_MULTIPLIER
+        encoded_bits: int = len(encoded_data) * self.VALUE_MULTIPLIER
 
         # Calculate the size of the table in bits
-        table_bits = 0
-        huffman_codes: dict[str, str] = self.format_table(values[1])
+        table_bits: int = 0
         for code, char in huffman_codes.items():
             # Each character is stored as 8 bits (1 byte) and the code is stored as its length in bits
             table_bits += 8 + (len(code) * self.VALUE_MULTIPLIER)
@@ -719,8 +667,8 @@ class Pgram(Huffman):
         coded_message: str = ""
         index: int = 0
 
-        #Start with even level, so we can alternate between odd and even levels
-        previous_odd: bool = False
+        # Start with even level
+        is_complementary: bool = False
 
         # For every pos in data, find the substring of length 1 to M that has best ration 
         while index < len(data):
@@ -749,10 +697,12 @@ class Pgram(Huffman):
             lookup: str = data[index:index + substring_length]
             huffman_code: str = huffman_codes[lookup]
 
-            # We start with even level, unless if previous level was odd we swap
-            if previous_odd:
-                # If previous level was odd, we need to swap the code for this substring to the opposite level
+            if is_complementary:
                 huffman_code = "".join(self.COMPLEMENT[char] for char in huffman_code)
+
+            # We start with even level, unless if previous level was odd we swap
+            if len(huffman_code) % 2 == 1:
+                is_complementary = not is_complementary
 
             # Add to the coded message
             coded_message += huffman_code
@@ -760,8 +710,6 @@ class Pgram(Huffman):
             # Move the index forward by the length of the substring we just encoded
             index += substring_length
 
-            # Update previous_odd for next iteration
-            previous_odd = len(huffman_code) % 2 == 1
 
         return coded_message
     
@@ -784,37 +732,7 @@ class Pgram(Huffman):
         return huffman_codes, encoded_message
 
 
-    def format_table(self, raw_table: str) -> dict[str, str]:
-        """
-        Formats the raw table into a dictionary of Huffman codes.
-
-        Args:
-            raw_table: The raw table to be formatted.
-
-        Returns:
-            A dictionary mapping Huffman codes to their corresponding characters.
-        """
-        "TODO: hacky asf but will get changed to json evetually"
-
-        entry_start: re.Pattern = re.compile(r'(.*[\n]*.*[\n]*):([GACT]+)')
-
-        huffman_codes: dict[str, str] = {}
-
-        # Divide into huffman codes based on matches and groups
-        for match in entry_start.finditer(raw_table):
-            # Remove last newline from char if it exists (happens as we seperate the table with newline)
-            if match.group(1).startswith('\n'):
-                char = match.group(1)[1:]
-            else:
-                char: str = match.group(1)
-            
-            code: str = match.group(2)
-            huffman_codes[code] = char
-    
-        return huffman_codes
-
-
-    def decode(self, encoded_data: str, huffman_codes: dict[str, str], reverse: bool = False) -> str:
+    def decode(self, encoded_data: str, huffman_codes: dict[str, str], reverse: bool = True) -> str:
         """
         Decodes the encoded data using the provided Huffman codes. Uses a complementary mapping of the Huffman codes to 
         serve as a complementary tree for decoding. As shown in paper: 
