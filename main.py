@@ -4,7 +4,7 @@ This module contains functions to test the encoding and decoding of files using 
 
 import os
 from Encoding import Encoding
-from HuffmanCoding import Huffman, BitScanQuaternary, Quaternary, Trenary
+from HuffmanCoding import Huffman, BitScanQuaternary, Pgram, Quaternary, Trenary
 from DNAMapping import DNAMap, DNAMapHuffman
 
 def check_match(original_file: str, decoded_file: str) -> bool:
