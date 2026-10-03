@@ -6,7 +6,7 @@ import os
 import sys
 from datetime import datetime
 from Encoding import Encoding
-from HuffmanCoding import Huffman, BitScanQuaternary, Pgram, Quaternary, Trenary
+from HuffmanCoding import Goldman, Huffman, BitScanQuaternary, Pgram, Quaternary, Trenary
 from DNAMapping import DNAMap, DNAMapHuffman
 
 def check_match(original_file: str, decoded_file: str) -> bool:
@@ -112,6 +112,7 @@ def test_file(original_dir: str, encoded_dir: str, decoded_dir: str, file_name: 
                   as_binary=True)
 
     test_encoding(origin, file_encoded_dir, file_decoded_dir, Pgram(8), original_size)
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, Goldman(), original_size)
 
     """ Test DNA mapping"""
     # Before testing DNA mapping, ensure that the Huffman encoded file exists
