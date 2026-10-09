@@ -111,26 +111,27 @@ class Encoding:
 
     @abstractmethod
     def encode(self, string: str) -> str:
-        pass
+        raise NotImplementedError("Subclasses must implement this method.")
 
 
     @abstractmethod
     def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
-        pass
+        raise NotImplementedError("Subclasses must implement this method.")
+
 
     @abstractmethod
     def decode(self, string: str) -> str:
-        pass
+        raise NotImplementedError("Subclasses must implement this method.")
 
 
     @abstractmethod
     def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
-        pass
+        raise NotImplementedError("Subclasses must implement this method.")
 
 
     @abstractmethod
     def calculate_size(self, json_path: str) -> tuple[int, int]:
-        pass
+        raise NotImplementedError("Subclasses must implement this method.")
 
 
     @staticmethod

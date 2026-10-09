@@ -6,10 +6,9 @@ strings. It also includes methods for encoding and decoding files, as well as ca
 Uses both standard DNA mapping and Huffman coding for compression.
 """
 
-import json
 from typing import Any, override
-from Encoding import Encoding
-from HuffmanCoding import Huffman
+from Encode.Methods.Encoding import Encoding
+from Encode.Methods.HuffmanCoding import Huffman
 
 
 class DNAMap(Encoding):
@@ -20,7 +19,8 @@ class DNAMap(Encoding):
         self.BIT_MULTIPLIER = 2
 
     @override
-    def read_json_table(self, json_path: str) -> tuple[str, bool]:
+    @staticmethod
+    def read_json_table(json_path: str) -> tuple[str, bool]:
         """
         Reads the encoded data and padding information from a JSON file.
 
@@ -200,7 +200,8 @@ class DNAMapHuffman(DNAMap):
 
 
     @override
-    def read_json_table(self, json_path: str) -> tuple[str, bool, dict[str, str]]:
+    @staticmethod
+    def read_json_table(json_path: str) -> tuple[str, bool, dict[str, str]]:
         """
         Reads the encoded data, padding information, and Huffman codes from a JSON file.
 

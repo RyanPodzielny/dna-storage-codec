@@ -8,10 +8,10 @@ purely a theoretical implementation, storing the Huffman table and encoded data 
 be stored differently in a real application.
 """
 
+
 from typing import Final, override
-from sqlalchemy import values
-from Encoding import Encoding
-from PriorityQueue import PriorityQueue
+from Encode.Methods.Encoding import Encoding
+from Encode.Helpers.PriorityQueue import PriorityQueue
 
 
 class Huffman(Encoding):
@@ -205,7 +205,8 @@ class Huffman(Encoding):
 
 
     @override
-    def read_json_table(self, json_path: str) -> tuple[str, dict[str, str]]:
+    @staticmethod
+    def read_json_table(json_path: str) -> tuple[str, dict[str, str]]:
         """
         Formats the raw Huffman table string into a dictionary mapping codes to characters.
 
@@ -215,7 +216,7 @@ class Huffman(Encoding):
         Returns:
             A dictionary mapping Huffman codes to their corresponding characters.
         """
-        json_data = super().read_json_table(json_path)
+        json_data = Encoding.read_json_table(json_path)
         return json_data[Encoding.ENCODED_DATA], json_data[Encoding.HUFFMAN_CODES], 
 
 
@@ -728,8 +729,6 @@ class Pgram(Huffman):
         Returns:
             The decoded data as a string.
         """
-
-        # For testing purposes, we can reverse the codes to decode the data
         if reverse:
             huffman_codes = {v: k for k, v in huffman_codes.items()}
 
@@ -764,6 +763,19 @@ class Pgram(Huffman):
 
 
 class Goldman(Huffman):
+    START_BASE: Final[str] = 'A'
+    ROTATING_MAP: Final[dict[str, dict[str, str]]] = {
+        'A': {'0': 'C', '1': 'G', '2': 'T'},
+        'C': {'0': 'G', '1': 'T', '2': 'A'},
+        'G': {'0': 'T', '1': 'A', '2': 'C'},
+        'T': {'0': 'A', '1': 'C', '2': 'G'}
+    }
+    # Construct the complementary rotating map
+    ROTATING_MAP_COMPLEMENT: Final[dict[str, dict[str, str]]] = {}
+    for base, mapping in ROTATING_MAP.items():
+        ROTATING_MAP_COMPLEMENT[base] = {v: k for k, v in mapping.items()}
+
+
     def __init__(self) -> None:
         """
         Initializes a new instance of the Goldman class.
@@ -773,22 +785,6 @@ class Goldman(Huffman):
         self.CHILDREN: int = 3
 
         self.ORDER = Huffman.GOLDMAN_ORDER
-
-        # Starting base for the rotating map
-        self.START_BASE = 'A'  
-
-        # Our rotating map for encoding trits to DNA bases
-        self.ROTATING_MAP: dict[str, dict[str, str]] = {
-            'A': {'0': 'C', '1': 'G', '2': 'T'},
-            'C': {'0': 'G', '1': 'T', '2': 'A'},
-            'G': {'0': 'T', '1': 'A', '2': 'C'},
-            'T': {'0': 'A', '1': 'C', '2': 'G'}
-        }
-
-        # Do now to avoid multiple loops on reversing map
-        self.ROTATING_MAP_COMPLEMENT: dict[str, dict[str, str]] = {}
-        for base, mapping in self.ROTATING_MAP.items():
-            self.ROTATING_MAP_COMPLEMENT[base] = {v: k for k, v in mapping.items()}
 
 
     def trit_encode(self, data: str) -> str:
@@ -808,7 +804,8 @@ class Goldman(Huffman):
         return encoded_data
 
 
-    def trit_to_dna(self, trit_data: str) -> str:
+
+    def trit_to_dna(self, trit_data: str, start_base: str = START_BASE) -> str:
         """
         Maps the trit data to DNA bases using the rotating map based on the previous base.
 
@@ -819,18 +816,18 @@ class Goldman(Huffman):
             The a string of the mapped DNA bases with no homopolymers.
 
         Raises:
-            ValueError: If a trit is not found in the Huffman codes or if the
+            ValueError: If a trit is not found in the Huffman codes or if the start base is not valid.
         """
         dna_string: str = ""
         # Always assume we start with the specified base
-        previous_base: str = self.START_BASE
+        previous_base: str = start_base
 
         for trit in trit_data:
-            if trit not in self.ROTATING_MAP[previous_base]:
+            if trit not in Goldman.ROTATING_MAP[previous_base]:
                 raise ValueError(f"Trit '{trit}' not found in the rotating map for base '{previous_base}'.")
 
             # Get the next base from the rotating map
-            next_base: str = self.ROTATING_MAP[previous_base][trit]
+            next_base: str = Goldman.ROTATING_MAP[previous_base][trit]
             dna_string += next_base
 
             # Update the previous base for the next iteration
@@ -860,7 +857,7 @@ class Goldman(Huffman):
         return huffman_codes, encoded_message
 
 
-    def dna_to_trit(self, encoded_data: str) -> str:
+    def dna_to_trit(self, encoded_data: str, start_base: str = START_BASE) -> str:
         """
         Maps the DNA bases back to trits using the rotating map complement based on the previous base.
 
@@ -875,14 +872,14 @@ class Goldman(Huffman):
         """
         trit_string: str = ""
         # Always assume we start with the specified base
-        previous_base: str = self.START_BASE
+        previous_base: str = start_base
 
         for base in encoded_data:
-            if base not in self.ROTATING_MAP_COMPLEMENT[previous_base]:
+            if base not in Goldman.ROTATING_MAP_COMPLEMENT[previous_base]:
                 raise ValueError(f"Base '{base}' not found in the rotating map complement for base '{previous_base}'.")
 
             # Get the corresponding trit from the rotating map complement
-            trit: str = self.ROTATING_MAP_COMPLEMENT[previous_base][base]
+            trit: str = Goldman.ROTATING_MAP_COMPLEMENT[previous_base][base]
             trit_string += trit
 
             # Update the previous base for the next iteration

@@ -5,9 +5,9 @@ This module contains functions to test the encoding and decoding of files using 
 import os
 import sys
 from datetime import datetime
-from Encoding import Encoding
-from HuffmanCoding import Goldman, Huffman, BitScanQuaternary, Pgram, Quaternary, Trenary
-from DNAMapping import DNAMap, DNAMapHuffman
+from Encode.Methods.Encoding import Encoding
+from Encode.Methods.HuffmanCoding import Goldman, Huffman, BitScanQuaternary, Pgram, Quaternary, Trenary
+from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
 
 def check_match(original_file: str, decoded_file: str) -> bool:
     """
