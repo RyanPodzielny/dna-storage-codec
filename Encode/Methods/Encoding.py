@@ -25,6 +25,9 @@ class Encoding:
     }
     REVERSE_DNA_MAP: Final[dict[str, str]] = {v: k for k, v in DNA_MAP.items()}
 
+    # Character used to pad oligos, needs to be added to trees
+    PADDING_CHAR: Final[str] = '' 
+
     # JSON keys for saving and reading encoded data
     ENCODED_DATA: Final[str] = "encoded_data"
     HUFFMAN_CODES: Final[str] = "huffman_codes"

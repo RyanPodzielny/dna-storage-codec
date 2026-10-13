@@ -74,7 +74,7 @@ class Huffman(Encoding):
         return frequencies
 
 
-    def build_tree(self, data: str, k: int = 1) -> None:
+    def build_tree(self, data: str, k: int = 1, add_padding: bool = False) -> None:
         """
         Builds the Huffman tree based on the character frequencies in the input data.
 
@@ -84,13 +84,20 @@ class Huffman(Encoding):
         Args:
             data: The input data for which the Huffman tree is to be built.
             k: The length of substrings to consider for frequency counting. Default is 1 (individual characters).
+            add_padding: A boolean indicating whether to add a padding character to the frequencies. 
 
         Raises:
             ValueError: If the input data is empty.
         """
+        frequencies: dict[str, int] = self.count_frequencies(data, k)
+
+        # Add a padding char for encoded segementing to ensure last segment is full
+        if add_padding:
+            frequencies[self.PADDING_CHAR] = 1
+
 
         # Set up our priority queue with the frequencies
-        self.priority_queue.build_queue(self.count_frequencies(data, k))
+        self.priority_queue.build_queue(frequencies)
         leaves: int = self.priority_queue.size
 
         # The first merge takes between 2 and our children nodes so that (leaves - first_merge) is a multiple of 
@@ -168,8 +175,28 @@ class Huffman(Encoding):
         return codes
 
 
+    def _add_padding(self, segment: str, huffman_codes: dict[str, str], payload_length: int) -> str:
+        """
+        Adds padding to the last segment if it is shorter than the specified payload length.
+
+        Args:
+            segment: The last segment of encoded data that may require padding.
+            payload_length: The desired length of each segment.
+            huffman_codes: A dictionary mapping each character to its corresponding Huffman code.
+        
+        Returns:
+            The segment with added padding if necessary.
+        """
+        if len(segment) < payload_length:
+            padding_length: int = payload_length - len(segment)
+            segment += huffman_codes[self.PADDING_CHAR] * padding_length
+        segment = segment[:payload_length]
+        
+        return segment
+    
+
     @override
-    def encode_segments(self, data: str, payload_length: int) -> list[str]:
+    def encode_segments(self, data: str, payload_length: int) -> tuple[dict[str, str], list[str]]:
         """
         Encodes the given data using the generated Huffman codes into segments of a specified payload length.
 
@@ -180,8 +207,12 @@ class Huffman(Encoding):
         Returns:
             A list of encoded segments as strings.
         """
+        huffman_codes: dict[str, str]
         encoded_data: str
-        _, encoded_data = self.encode(data)
+
+        self.build_tree(data, add_padding=True)
+        huffman_codes = self.generate_codes()
+        encoded_data = "".join(huffman_codes[char] for char in data)
 
         # Split the encoded data into segments of the specified payload length
         segments: list[str] = []
@@ -194,7 +225,10 @@ class Huffman(Encoding):
 
             segments.append(segment)
 
-        return segments
+        # If the last segment is not the full length, add padding
+        segments[-1] = self._add_padding(segments[-1], huffman_codes, payload_length)
+        
+        return huffman_codes, segments
     
 
     @override
@@ -697,8 +731,10 @@ class Pgram(Huffman):
 
     def build_optimal_coding(self, 
                              data: str, 
-                             huffman_codes: dict[str, str], 
-                             previous_base: str = Huffman.START_BASE) -> str:
+                             huffman_codes: dict[str, str],
+                             payload_length: int | None = None,
+                             segment_flag: bool = False,
+                             previous_base: str = Huffman.START_BASE) -> tuple[str, int]:
         """
         Builds the optimal coding for the given data using p-gram encoding. Essentially, for every position in the data,
         we find the substring of length 1 to M that has the best ratio of length of substring to length of code. 
@@ -707,16 +743,25 @@ class Pgram(Huffman):
         Args:
             data: The segement of data we are encoding.
             huffman_codes: A dictionary mapping each p-gram to its corresponding Huffman code.
-            previous_bases: A list of previous bases.
+            payload_length: The length of the payload.
+            segment_flag: A boolean indicating whether we are encoding a segment of data.
+            previous_base: The previous base.
 
         Returns:
-            The encoded data as a string.
+            A tuple containing the encoded data as a string and the index of the last processed character.
 
         Raises:
             ValueError: If previous base is not 1 and not in DNA sets
         """
         if len(previous_base) != 1 or previous_base not in Encoding.DNA_BASES:
             raise ValueError("Previous base must be a single character and one of the DNA bases.")
+
+        if payload_length is not None and payload_length <= 0:
+            raise ValueError("Payload length must be a positive integer.")
+
+    
+        if not payload_length:
+            payload_length = len(data)
 
         coded_message: str = ""
         index: int = 0
@@ -732,8 +777,8 @@ class Pgram(Huffman):
 
             # Find the best substring for this position
             for clength in range(1, self.M + 1):
-                # If the substring length goes beyond the data length, stop checking for longer substrings
-                if index + clength > len(data):
+                # If the substring length goes beyond stopping lengths, stop checking for longer substrings
+                if index + clength > payload_length or index + clength > len(data):
                     break
 
                 # Get the substring
@@ -760,20 +805,53 @@ class Pgram(Huffman):
 
             # Add to the coded message
             coded_message += huffman_code
+            if segment_flag and len(coded_message) > payload_length:
+                coded_message = coded_message[:payload_length]
+                return coded_message, index
 
             # Move the index forward by the length of the substring we just encoded
             index += substring_length
 
-        return coded_message
+        return coded_message, index
 
-
-    # TODO: Implement - need to mess with optimal coding length
     @override
     def encode_segments(self, 
                         data: str, 
                         payload_length: int, 
                         previous_bases: list[str]) -> tuple[dict[str, str], list[str]]:
-        return {}, []
+
+        # Build our trees and get our codes
+        self.build_tree(data, add_padding=True)
+        huffman_codes: dict[str, str] = self.generate_codes()
+
+        segments: list[str] = []
+
+        data_length: int = len(data)
+
+        encoded_message: str
+        last_data_index: int = 0
+        bases_index: int = 0
+
+        # While we still have data to encode, build the optimal coding for next segment and append it
+        while data_length > 0:
+            encoded_message, last_data_index = self.build_optimal_coding(
+                data[len(data) - data_length:], 
+                huffman_codes, 
+                payload_length, 
+                True,
+                previous_bases[bases_index]
+            )
+            segments.append(encoded_message)
+            bases_index += 1
+
+            # Keep our data length check seperated to avoid issues with the last segment being shorter than 
+            #   payload length creating an infinite loop
+            data_length -= last_data_index
+
+        # Ensure our last segment is our payload length
+        segments[-1] = self._add_padding(segments[-1], huffman_codes, payload_length)
+
+        return huffman_codes, segments
     
 
     @override
@@ -791,8 +869,96 @@ class Pgram(Huffman):
 
         self.build_tree(data)
         huffman_codes: dict[str, str] = self.generate_codes()
-        encoded_message: str = self.build_optimal_coding(data, huffman_codes)
+        encoded_message: str 
+        encoded_message, _ = self.build_optimal_coding(data, huffman_codes)
         return huffman_codes, encoded_message
+
+
+    def _get_codes(self, huffman_codes: dict[str, str], reverse: bool = True) -> tuple[dict[str, str], dict[str, str]]:
+        """
+        Reverses the huffman if needed and retreives the complementary mapping of the Huffman codes. Helper to decode
+        normally and by segements.
+
+        Args:
+            huffman_codes: The input code to be complemented.
+            reverse: A boolean indicating whether to reverse the Huffman codes for decoding.
+        
+        Returns:
+            A tuple containing the (possibly reversed) Huffman codes and the complementary mapping of the Huffman codes.
+        """
+        if reverse:
+            huffman_codes = {v: k for k, v in huffman_codes.items()}
+
+        # Create a complementary mapping of the Huffman codes to serve as complementary tree
+        complement_codes: dict[str, str] = {}
+        for code, char in huffman_codes.items():
+            complement_codes["".join(self.COMPLEMENT[base] for base in code)] = char
+
+        return huffman_codes, complement_codes
+
+
+    def _decode_part(self, huffman_codes: dict[str, str], complement_codes: dict[str, str], encoded_data: str) -> str:
+        """
+        Decodes a part of the encoded data using the provided Huffman codes and their complementary mapping.
+
+        Args:
+            huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
+            complement_codes: A dictionary mapping complementary Huffman codes to their corresponding characters.
+            encoded_data: The encoded data to be decoded.
+
+        Returns:
+            The decoded data as a string.
+        """
+        decoded_data: str = ""
+        current_code: str = ""
+
+        # For all our bits, try to match them to a code, match = append and reset
+        for base in encoded_data:
+            current_code += base
+
+            is_even: bool = current_code[0] in self.EVEN
+
+            # If match found, append and reset current_code
+            if is_even and current_code in huffman_codes:
+                decoded_data += huffman_codes[current_code]
+                current_code = ""
+            elif not is_even and current_code in complement_codes:
+                decoded_data += complement_codes[current_code]
+                current_code = ""
+
+        return decoded_data
+    
+
+    @override
+    def decode_segments(self, 
+                        encoded_data: list[str], 
+                        huffman_codes: dict[str, str], 
+                        reverse: bool = True) -> str:
+        """
+        Decodes the encoded data using the provided Huffman codes.
+
+        Args:
+            encoded_data: A list of encoded segments to be decoded.
+            huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
+            reverse: A boolean indicating whether to reverse the Huffman codes for decoding.
+
+        Returns:
+            The decoded data as a string.
+        """
+
+        # Can't just call decode because creating he complementary mapping takes a bunch of time and we don't want to
+        #   do that for every single segment
+        complement_codes: dict[str, str] = {}
+        huffman_codes, complement_codes = self._get_codes(huffman_codes, reverse=reverse)
+        
+        decoded_data: str = ""
+
+        # For every segment, decode it and append to the decoded data
+        for segment in encoded_data:
+            decoded_segment: str = self._decode_part(huffman_codes, complement_codes, segment)
+            decoded_data += decoded_segment
+
+        return decoded_data
 
 
     @override
@@ -810,30 +976,12 @@ class Pgram(Huffman):
         Returns:
             The decoded data as a string.
         """
-        if reverse:
-            huffman_codes = {v: k for k, v in huffman_codes.items()}
+        # Create a complementary mapping of the Huffman codes to serve as complementary tree, and update huffman
+        complement_codes: dict[str, str] = {}
+        huffman_codes, complement_codes = self._get_codes(huffman_codes, reverse=reverse)
 
-        # Create a complementary mapping of the Huffman codes to serve as complementary tree
-        compliement_codes: dict[str, str] = {}
-        for code, char in huffman_codes.items():
-            compliement_codes["".join(self.COMPLEMENT[base] for base in code)] = char
-
-        decoded_data: str = ""
-        current_code: str = ""
-
-        # For all our bits, try to match them to a code, match = append and reset
-        for base in encoded_data:
-            current_code += base
-
-            is_even: bool = current_code[0] in self.EVEN
-
-            # If match found, append and reset current_code
-            if is_even and current_code in huffman_codes:
-                decoded_data += huffman_codes[current_code]
-                current_code = ""
-            elif not is_even and current_code in compliement_codes:
-                decoded_data += compliement_codes[current_code]
-                current_code = ""
+        # Actually decode with the codes and complementary codes
+        decoded_data: str = self._decode_part(huffman_codes, complement_codes, encoded_data)
 
         return decoded_data
 
@@ -936,7 +1084,7 @@ class Goldman(Huffman):
         Raises:
             ValueError: If the length of the previous bases list is less than the number of segments
         """
-        self.build_tree(data)
+        self.build_tree(data, add_padding=True)
         huffman_codes: dict[str, str] = self.generate_codes()
         trit_encoded_data: str = "".join(huffman_codes[char] for char in data)
 
@@ -952,12 +1100,15 @@ class Goldman(Huffman):
 
             # Index needs to be put back to normal for previous base list
             previous_base: str = previous_bases[index // payload_length]
-            
+
+            # If we need to add padding to the last segment, do it here
+            trit_segment = self._add_padding(trit_segment, huffman_codes, payload_length)
 
             # Our DNA encoding is based on the previous base, so we need to pass that in
             encoded_segment: str = self.trit_to_dna(trit_segment, start_base=previous_base)
 
             encoded_message.append(encoded_segment)
+
 
         return huffman_codes, encoded_message
 
