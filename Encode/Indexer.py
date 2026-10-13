@@ -3,11 +3,12 @@ Module for enumerative indexing of DNA sequences. This module provides classes a
 oligos, which is needed to identify them for decoding. 
 """
 
+import math
 from abc import abstractmethod
 from functools import lru_cache
 from typing import Final, override
-import math
 from Encode.Methods.HuffmanCoding import Goldman
+from Encode.Methods.Encoding import Encoding
 
 class Indexer:
     def __init__(self, num_oligos: int, width: int | None):
@@ -42,6 +43,98 @@ class Indexer:
     @abstractmethod
     def unrank(self, index: int, primer: str, payload: str) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
+
+
+class DNAMapIndexer(Indexer):
+    def __init__(self, num_oligos: int, width: int | None):
+        """
+        Initializes the DNAMapIndexer with the number of oligos and the width of the index sequence.
+        
+        Args:
+            num_oligos: The number of oligos to index.
+            width: The width of the index sequence. If None, it will be determined based on the number of oligos.
+        """
+        super().__init__(num_oligos, width)
+
+
+    @override
+    def calculate_total_valid_indices(self) -> int:
+        """
+        Calculates the total number of valid index sequences for the DNAMap indexing scheme.
+
+        Returns:
+            The total number of valid index sequences.
+        """
+        return 4 ** self.width
+
+
+    @override
+    def determine_optimal_width(self) -> int:
+        """
+        Determines the minimum width of the index sequence required to uniquely identify a given number of oligos.
+
+        Returns:
+            The optimal width of the index sequence.
+        """
+        # Each 2 bits represents 1 base, so we need to calculate the number of bits required to represent the number of oligos
+        bits_required: int = math.ceil(math.log2(self.num_oligos))
+
+        # Since each base is represented by 2 bits, we need to round up to the nearest even number of bits
+        if bits_required % 2 != 0:
+            bits_required += 1
+
+        # The width is the number of bases, which is the number of bits divided by 2
+        width: int = bits_required // 2
+
+        # Ensure at least a width of 1 for a single base
+        if width == 0:
+            width = 1  
+
+        return width
+
+
+    @override
+    def rank(self, index_sequence: str) -> int:
+        """
+        Calculates the rank of a given index sequence based on the DNA mapping indexing scheme.
+
+        Args:
+            index_sequence: The index sequence to calculate the rank for.
+
+        Returns:
+            The rank of the index sequence.
+        """
+        # Convert the index sequence to a binary string
+        binary_string: str = ""
+        for base in index_sequence:
+            binary_string += Encoding.REVERSE_DNA_MAP[base]
+
+        # Convert to decimal
+        rank: int = int(binary_string, 2)
+
+        return rank
+
+
+    @override
+    def unrank(self, index: int) -> str:
+        """
+        Generates the index sequence corresponding to a given rank based on the DNA mapping indexing scheme.
+
+        Args:
+            index: The rank of the index sequence to generate.
+
+        Returns:
+            The index sequence corresponding to the given rank.
+        """
+        # Convert the decimal index to a binary string with correct leading zeros (need x2 as each base is 2 bits)
+        binary_string: str = f"{index:0{self.width * 2}b}"
+
+        # Map the binary string to DNA bases using the DNAMap scheme
+        unrank: str = ""
+        for index in range(0, len(binary_string), 2):
+            unrank += Encoding.DNA_MAP[binary_string[index:index + 2]]
+
+        return unrank
 
 
 class GoldmanIndexer(Indexer):
@@ -172,6 +265,13 @@ class EnumerativeIndexer(Indexer):
         """
         Initializes the EnumerativeIndexer with the number of oligos, width of the index sequence, and maximum allowed 
         homopolymer run length.
+
+        Note: cannot be combined with state aware encoding methods as the indexer needs to know the payload as a DNA
+        sequenece, but the payload requires the previous base (which would be the index base that cannot be encoded).
+        This circular dependency is fine, just mean Pgrams, Complementary Tree and Goldman cannot be state aware - no
+        homopolymers will occur as the indexer still solves for that, just cannot be state aware together. The 
+        recommended solution is to encode the payload first as it is the main purpose of the encoding, then use the 
+        indexer.
         """
         # Needs to be before super().__init__() because determine_optimal_width() is called in the parent
         self.max_run_length: int = max_run_length

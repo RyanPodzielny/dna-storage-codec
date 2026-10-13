@@ -30,6 +30,7 @@ class Encoding:
     HUFFMAN_CODES: Final[str] = "huffman_codes"
     HAS_PADDING: Final[str] = "has_padding"
     ENCODED_TYPE: Final[str] = "encoded_type"
+    INDEXER_TYPE: Final[str] = "indexer_type"
 
     def __init__(self):
         """
@@ -62,16 +63,18 @@ class Encoding:
         with open(json_inpath, 'r', encoding='utf-8', errors='ignore') as json_file:
             json_data = json.load(json_file)
 
-            if json_data.keys() != {Encoding.ENCODED_DATA, Encoding.HUFFMAN_CODES, 
-                                    Encoding.HAS_PADDING, Encoding.ENCODED_TYPE}:
+            if json_data.keys() != {Encoding.ENCODED_DATA, Encoding.HUFFMAN_CODES, Encoding.HAS_PADDING, 
+                                    Encoding.ENCODED_TYPE, Encoding.INDEXER_TYPE}:
                 raise ValueError(f"JSON file {json_inpath} does not contain the expected keys.")
             return json_data
 
     
-    def save_json_table(self, json_path: str, 
+    def save_json_table(self, 
+                        json_path: str, 
                         encoded_data: str, 
                         huffman_codes: dict[str, str] = {},
-                        has_padding: bool = False) -> None:
+                        has_padding: bool = False,
+                        indexer_type: str = "") -> None:
         """
         Saves the encoded data and padding information to a file. Baseline for all children classes. Must have some 
         encoded data to save, otherwise raises a ValueError. All other paramters are optional, unless the encoding is 
@@ -104,13 +107,19 @@ class Encoding:
                 Encoding.ENCODED_DATA: encoded_data,
                 Encoding.HUFFMAN_CODES: huffman_codes,
                 Encoding.HAS_PADDING: has_padding,
+                Encoding.INDEXER_TYPE: indexer_type,
                 Encoding.ENCODED_TYPE: class_name
             }
             json.dump(save, encoded_file, indent=4)
 
 
     @abstractmethod
-    def encode(self, string: str) -> str:
+    def encode_segments(self, data: str, payload_length: int) -> list[str]:
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+
+    @abstractmethod
+    def encode(self, data: str) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
@@ -120,7 +129,12 @@ class Encoding:
 
 
     @abstractmethod
-    def decode(self, string: str) -> str:
+    def decode_segments(self, data: list[str]) -> str:
+        raise NotImplementedError("Subclasses must implement this method.")
+
+
+    @abstractmethod
+    def decode(self, data: str) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
@@ -221,7 +235,7 @@ class Encoding:
         huffman_codes: dict[str, str] = json_data[Encoding.HUFFMAN_CODES]
         has_padding: bool = json_data[Encoding.HAS_PADDING]
         encoded_type: str = json_data[Encoding.ENCODED_TYPE]
-
+        indexer_type: str = json_data[Encoding.INDEXER_TYPE]
 
         # Calculate the size of the encoded data and the table
         encoded_size: int
@@ -232,7 +246,7 @@ class Encoding:
         print(f"\tEncoded data size: {encoded_size} bits")
         print(f"\tTable size: {table_size} bits")
         print(f"\tTotal size: {encoded_size + table_size} bits")
-
+        print(f"\tIndexer type: {indexer_type}")
 
         if encoded_type in {"DNAMap", "DNAMapHuffman"}:
             print(f"\tPadding added: {has_padding}")

@@ -21,6 +21,8 @@ class Huffman(Encoding):
     GOLDMAN_ORDER: Final[tuple[str, ...]] = ('0', '1', '2')
     # Order for tree when Huffman has more than up to 4 children
     TREE_ORDER: Final[tuple[str, ...]] = ('A', 'C', 'G', 'T')
+    # Certain methods require a starting base to not have homopolymers
+    START_BASE: Final[str] = 'A'
 
     def __init__(self) -> None:
         """
@@ -89,6 +91,16 @@ class Huffman(Encoding):
 
         # Set up our priority queue with the frequencies
         self.priority_queue.build_queue(self.count_frequencies(data, k))
+        leaves: int = self.priority_queue.size
+
+        # The first merge takes between 2 and our children nodes so that (leaves - first_merge) is a multiple of 
+        #   (childnre - 1); after that every subsequent merge takes exactly 'arity' nodes. For arity==2 this is always 2
+        #   Basically ensures that our n-ary Huffman makes the first merge the small one so every other merge is full.
+        take: int = 0
+        if leaves >= 2:
+            take = ((leaves - 2) % (self.CHILDREN - 1)) + 2
+        else:
+            take = self.CHILDREN
 
         # Merged values
         merged_frequency: int = 0
@@ -96,9 +108,15 @@ class Huffman(Encoding):
 
         # While there is more than one node in the priority queue, we need to merge nodes
         while self.priority_queue.size > 1:
+            merged_frequency = 0
+
             children: list[tuple[int, str]] = []
-            # Dequeue nodes with smallest frequencies. If we don't have the amount, just take what we can
-            for _ in range(self.CHILDREN):
+
+            # Ensure we don't take too much
+            if self.priority_queue.size < take:
+                take = self.priority_queue.size
+
+            for _ in range(take):
                 if not self.priority_queue.is_empty():
                     children.append(self.priority_queue.dequeue())
                 else:
@@ -148,6 +166,36 @@ class Huffman(Encoding):
         _create_code(root_node)
 
         return codes
+
+
+    @override
+    def encode_segments(self, data: str, payload_length: int) -> list[str]:
+        """
+        Encodes the given data using the generated Huffman codes into segments of a specified payload length.
+
+        Args:
+            data: The string to be encoded.
+            payload_length: The length of each segment in the encoded data.
+
+        Returns:
+            A list of encoded segments as strings.
+        """
+        encoded_data: str
+        _, encoded_data = self.encode(data)
+
+        # Split the encoded data into segments of the specified payload length
+        segments: list[str] = []
+        for index in range(0, len(encoded_data), payload_length):
+            # If goes over, just take what we can
+            if index + payload_length > len(encoded_data):
+                segment: str = encoded_data[index:]
+            else:
+                segment: str = encoded_data[index:index + payload_length]
+
+            segments.append(segment)
+
+        return segments
+    
 
     @override
     def encode(self, data: str) -> tuple[dict[str, str], str]:
@@ -217,8 +265,24 @@ class Huffman(Encoding):
             A dictionary mapping Huffman codes to their corresponding characters.
         """
         json_data = Encoding.read_json_table(json_path)
-        return json_data[Encoding.ENCODED_DATA], json_data[Encoding.HUFFMAN_CODES], 
+        return json_data[Encoding.ENCODED_DATA], json_data[Encoding.HUFFMAN_CODES]
 
+
+    @override
+    def decode_segments(self, encoded_data: list[str], huffman_codes: dict[str, str]) -> str:
+        """
+        Decodes the encoded data using the provided Huffman codes.
+
+        Args:
+            encoded_data: A list of encoded segments to be decoded.
+            huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
+
+        Returns:
+            The decoded data as a string.
+        """
+        encoded_string: str = "".join(encoded_data)
+        return self.decode(encoded_string, huffman_codes)
+    
 
     @override
     def decode(self, encoded_data: str, huffman_codes: dict[str, str], reverse: bool = True) -> str:
@@ -631,25 +695,34 @@ class Pgram(Huffman):
         return codes
 
 
-    def build_optimal_coding(self, data: str, huffman_codes: dict[str, str]) -> str:
+    def build_optimal_coding(self, 
+                             data: str, 
+                             huffman_codes: dict[str, str], 
+                             previous_base: str = Huffman.START_BASE) -> str:
         """
         Builds the optimal coding for the given data using p-gram encoding. Essentially, for every position in the data,
         we find the substring of length 1 to M that has the best ratio of length of substring to length of code. 
         We then append the code for that substring to the encoded message.
 
         Args:
-            data: The input data to be encoded.
+            data: The segement of data we are encoding.
             huffman_codes: A dictionary mapping each p-gram to its corresponding Huffman code.
+            previous_bases: A list of previous bases.
 
         Returns:
             The encoded data as a string.
+
+        Raises:
+            ValueError: If previous base is not 1 and not in DNA sets
         """
+        if len(previous_base) != 1 or previous_base not in Encoding.DNA_BASES:
+            raise ValueError("Previous base must be a single character and one of the DNA bases.")
 
         coded_message: str = ""
         index: int = 0
 
-        # Start with even level
-        is_complementary: bool = False
+        # Check to see if we are starting with an even or odd level based on the previous base
+        is_complementary: bool = True if previous_base in self.ODD else False
 
         # For every pos in data, find the substring of length 1 to M that has best ration 
         while index < len(data):
@@ -691,8 +764,16 @@ class Pgram(Huffman):
             # Move the index forward by the length of the substring we just encoded
             index += substring_length
 
-
         return coded_message
+
+
+    # TODO: Implement - need to mess with optimal coding length
+    @override
+    def encode_segments(self, 
+                        data: str, 
+                        payload_length: int, 
+                        previous_bases: list[str]) -> tuple[dict[str, str], list[str]]:
+        return {}, []
     
 
     @override
@@ -763,7 +844,6 @@ class Pgram(Huffman):
 
 
 class Goldman(Huffman):
-    START_BASE: Final[str] = 'A'
     ROTATING_MAP: Final[dict[str, dict[str, str]]] = {
         'A': {'0': 'C', '1': 'G', '2': 'T'},
         'C': {'0': 'G', '1': 'T', '2': 'A'},
@@ -804,13 +884,13 @@ class Goldman(Huffman):
         return encoded_data
 
 
-
-    def trit_to_dna(self, trit_data: str, start_base: str = START_BASE) -> str:
+    def trit_to_dna(self, trit_data: str, start_base: str = Huffman.START_BASE) -> str:
         """
         Maps the trit data to DNA bases using the rotating map based on the previous base.
 
         Args:
             trit_data: The trit data to be mapped.
+            start_base: The starting base for the mapping.
 
         Returns:
             The a string of the mapped DNA bases with no homopolymers.
@@ -837,6 +917,52 @@ class Goldman(Huffman):
 
 
     @override
+    def encode_segments(self, 
+                        data: str, 
+                        payload_length: int,
+                        previous_bases: list[str]) -> tuple[dict[str, str], list[str]]:
+        """
+        Encodes the given data with Goldman's rotating tree approach using the generated Huffman codes and a specified
+        starting base into segments of a specified payload length.
+
+        Args:
+            data: The string to be encoded.
+            payload_length: The length of each segment in the encoded data.
+            previous_bases: A list of previous bases (like the index or primer) for the mapping.
+
+        Returns:
+            A tuple containing the Huffman codes and the encoded data.
+
+        Raises:
+            ValueError: If the length of the previous bases list is less than the number of segments
+        """
+        self.build_tree(data)
+        huffman_codes: dict[str, str] = self.generate_codes()
+        trit_encoded_data: str = "".join(huffman_codes[char] for char in data)
+
+        encoded_message: list[str] = []
+
+        # Go by the payload length and encode each segment with the corresponding previous base
+        for index in range(0, len(trit_encoded_data), payload_length):
+            # If goes over, just take what we can
+            if index + payload_length > len(trit_encoded_data):
+                trit_segment: str = trit_encoded_data[index:]
+            else:
+                trit_segment: str = trit_encoded_data[index:index + payload_length]
+
+            # Index needs to be put back to normal for previous base list
+            previous_base: str = previous_bases[index // payload_length]
+            
+
+            # Our DNA encoding is based on the previous base, so we need to pass that in
+            encoded_segment: str = self.trit_to_dna(trit_segment, start_base=previous_base)
+
+            encoded_message.append(encoded_segment)
+
+        return huffman_codes, encoded_message
+
+
+    @override
     def encode(self, data: str) -> tuple[dict[str, str], str]:
         """
         Encodes the given data with Goldman's rotating tree approach using the generated Huffman codes.
@@ -857,7 +983,7 @@ class Goldman(Huffman):
         return huffman_codes, encoded_message
 
 
-    def dna_to_trit(self, encoded_data: str, start_base: str = START_BASE) -> str:
+    def dna_to_trit(self, encoded_data: str, start_base: str = Huffman.START_BASE) -> str:
         """
         Maps the DNA bases back to trits using the rotating map complement based on the previous base.
 
@@ -886,6 +1012,41 @@ class Goldman(Huffman):
             previous_base = base
 
         return trit_string
+
+
+    @override
+    def decode_segments(self, 
+                        encoded_data: list[str], 
+                        huffman_codes: dict[str, str],
+                        payload_length: int, 
+                        previous_bases: list[str]) -> str:
+        """
+        Decodes the encoded data with Goldman's rotating tree approach using the provided Huffman codes and a specified
+        starting base.
+
+        Args:
+            encoded_data: The encoded data to be decoded as a list of strings.
+            huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
+            previous_bases: A list of previous bases (like the index or primer) for the mapping.
+
+        Returns:
+            A string of the decoded data.
+
+        Raises:
+            ValueError: If the length of the encoded data does not match the length of the previous bases list.
+        """
+        if len(previous_bases) < (len(encoded_data) // payload_length):
+            raise ValueError("Not enough previous bases provided for the number of segments to encode.")
+
+        trit_data: str = ""
+
+        # Append the trit segments to a list with being aware what starting base we are using for each segment
+        for index, segment in enumerate(encoded_data):
+            previous_base: str = previous_bases[index]
+            trit_segment: str = self.dna_to_trit(segment, start_base=previous_base)
+            trit_data += trit_segment
+
+        return super().decode(trit_data, huffman_codes, reverse=True)
 
 
     @override

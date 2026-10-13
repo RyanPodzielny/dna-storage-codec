@@ -1,5 +1,5 @@
-from Methods.Encoding import Encoding
-from Indexer import Indexer
+from Encode.Methods.Encoding import Encoding
+from Encode.Indexer import Indexer
 
 class OligoFramer:
     """
