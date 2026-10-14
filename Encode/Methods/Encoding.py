@@ -25,13 +25,10 @@ class Encoding:
     }
     REVERSE_DNA_MAP: Final[dict[str, str]] = {v: k for k, v in DNA_MAP.items()}
 
-    # Character used to pad oligos, needs to be added to trees
-    PADDING_CHAR: Final[str] = '' 
-
     # JSON keys for saving and reading encoded data
     ENCODED_DATA: Final[str] = "encoded_data"
     HUFFMAN_CODES: Final[str] = "huffman_codes"
-    HAS_PADDING: Final[str] = "has_padding"
+    HAS_SINGLE_PADDING: Final[str] = "has_single_padding"
     ENCODED_TYPE: Final[str] = "encoded_type"
     INDEXER_TYPE: Final[str] = "indexer_type"
 
@@ -66,7 +63,7 @@ class Encoding:
         with open(json_inpath, 'r', encoding='utf-8', errors='ignore') as json_file:
             json_data = json.load(json_file)
 
-            if json_data.keys() != {Encoding.ENCODED_DATA, Encoding.HUFFMAN_CODES, Encoding.HAS_PADDING, 
+            if json_data.keys() != {Encoding.ENCODED_DATA, Encoding.HUFFMAN_CODES, Encoding.HAS_SINGLE_PADDING, 
                                     Encoding.ENCODED_TYPE, Encoding.INDEXER_TYPE}:
                 raise ValueError(f"JSON file {json_inpath} does not contain the expected keys.")
             return json_data
@@ -109,12 +106,17 @@ class Encoding:
             save: dict[str, Any] = {
                 Encoding.ENCODED_DATA: encoded_data,
                 Encoding.HUFFMAN_CODES: huffman_codes,
-                Encoding.HAS_PADDING: has_padding,
+                Encoding.HAS_SINGLE_PADDING: has_padding,
                 Encoding.INDEXER_TYPE: indexer_type,
                 Encoding.ENCODED_TYPE: class_name
             }
             json.dump(save, encoded_file, indent=4)
 
+
+    @abstractmethod
+    def _add_padding(self, data: str, payload_length: int) -> str:
+        raise NotImplementedError("Subclasses must implement this method.")
+    
 
     @abstractmethod
     def encode_segments(self, data: str, payload_length: int) -> list[str]:
@@ -161,10 +163,13 @@ class Encoding:
 
         Returns:
             An ASCII string representation of the binary string.
+
+        Raises:
+            ValueError: If cannot convert a byte to an ASCII character.
         """
         ascii_string: str = ""
-        for i in range(0, len(binary_string), 8):
-            byte: str = binary_string[i:i+8]
+        for index in range(0, len(binary_string), 8):
+            byte: str = binary_string[index:index+8]
             ascii_string += chr(int(byte, 2))
         return ascii_string
 
@@ -180,7 +185,7 @@ class Encoding:
         Returns:
             A binary string representation of the ASCII string.
         """
-        return ''.join(format(ord(char), '08b') for char in ascii_string)
+        return "".join(format(ord(char), '08b') for char in ascii_string)
 
 
     def count_runs(self, data: str, k: int = 4) -> int:
@@ -236,7 +241,7 @@ class Encoding:
         json_data: dict[str, Any] = Encoding.read_json_table(json_path)
         encoded_data: str = json_data[Encoding.ENCODED_DATA]
         huffman_codes: dict[str, str] = json_data[Encoding.HUFFMAN_CODES]
-        has_padding: bool = json_data[Encoding.HAS_PADDING]
+        has_padding: bool = json_data[Encoding.HAS_SINGLE_PADDING]
         encoded_type: str = json_data[Encoding.ENCODED_TYPE]
         indexer_type: str = json_data[Encoding.INDEXER_TYPE]
 
