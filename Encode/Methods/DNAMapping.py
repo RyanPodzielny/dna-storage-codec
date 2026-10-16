@@ -14,6 +14,8 @@ from Encode.Methods.HuffmanCoding import Huffman
 class DNAMap(Encoding):
     # Null chracter used to pad oligos for DNAMap where a empty string cannot be represenented
     CHUNKING_PADDING_CHAR: Final[str] = '\x00' 
+    # For normal encoding without segmenting (sepfically for Huffman) chance we have odd bits, so need to add 1 oon
+    FINAL_PADDING_CHAR: Final[str] = '0'
 
     def __init__(self) -> None:
         super().__init__()
@@ -120,7 +122,7 @@ class DNAMap(Encoding):
 
         # When decoding if the padding was added, we will chop it off
         if len(binary_string) % 2 != 0:
-            binary_string += '0'
+            binary_string += DNAMap.FINAL_PADDING_CHAR
             has_padding = True
 
         # Now encode the binary string to DNA
@@ -245,8 +247,21 @@ class DNAMap(Encoding):
         return decoded_data
 
 
+    def calculate_num_bases(self, encoded_data: str) -> int:
+        """
+        Calculates the number of DNA bases in the encoded data.
+
+        Args:
+            encoded_data: The encoded DNA sequence.
+
+        Returns:
+            The number of DNA bases in the encoded data. 
+        """
+        return len(encoded_data.strip())
+
+
     @override
-    def calculate_size(self, json_path: str) -> tuple[int, int]:
+    def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
         """
         Calculates the size of the encoded data in bits.
 
@@ -318,10 +333,11 @@ class DNAMapHuffman(DNAMap):
 
         # Remove 1 bit from payload length to account for padding - need to be done to ensure we have correct payload
         #   length for the sequence. No matter what we are adding padding to the end. We also multiply by 2 since we
-        #   are encoding to binary first, then to DNA. This is because the payload length is in terms of DNA bases, but we need to account for the fact that each base represents 2 bits.
+        #   are encoding to binary first, then to DNA. This is because the payload length is in terms of DNA bases, but 
+        #   we need to account for the fact that each base represents 2 bits.
         huffman_codes, encoded_data = Huffman().encode_segments(data, payload_length * self.BIT_MULTIPLIER - 1)
         for index, segment in enumerate(encoded_data):
-            segment = segment + '0'
+            segment = segment + DNAMap.FINAL_PADDING_CHAR
 
             # Now encode the binary segment to DNA
             dna_segment: str
@@ -471,7 +487,7 @@ class DNAMapHuffman(DNAMap):
 
 
     @override
-    def calculate_size(self, json_path: str) -> tuple[int, int]:
+    def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
         """
         Calculates the size of the encoded data in bits.
 
@@ -481,4 +497,4 @@ class DNAMapHuffman(DNAMap):
         Returns:
             The size of the encoded data in bits and the size of the table in bits.
         """
-        return Huffman().calculate_size(json_path)
+        return Huffman().calculate_overall_size(json_path)

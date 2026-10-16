@@ -71,7 +71,7 @@ class Encoding:
     
     def save_json_table(self, 
                         json_path: str, 
-                        encoded_data: str, 
+                        encoded_data: str | list[str], 
                         huffman_codes: dict[str, str] = {},
                         has_padding: bool = False,
                         indexer_type: str = "") -> None:
@@ -82,9 +82,10 @@ class Encoding:
 
         Args:
             json_path: The path to the output file where the encoded data will be written.
-            encoded_data: The encoded DNA sequence as a string.
+            encoded_data: The encoded DNA sequence as a string or a list of strings (for segmented data).
+            huffman_codes: A dictionary mapping each character to its corresponding Huffman code. Default is
             has_padding: A boolean indicating whether padding was added during encoding.
-            huffman_codes: A dictionary mapping each character to its corresponding Huffman code.
+            indexer_type: A string indicating the type of indexer used for encoding.
 
         Returns:
             None
@@ -149,7 +150,7 @@ class Encoding:
 
 
     @abstractmethod
-    def calculate_size(self, json_path: str) -> tuple[int, int]:
+    def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
@@ -248,7 +249,7 @@ class Encoding:
         # Calculate the size of the encoded data and the table
         encoded_size: int
         table_size: int
-        encoded_size, table_size = self.calculate_size(json_path)
+        encoded_size, table_size = self.calculate_overall_size(json_path)
 
         print(f"{encoded_type} Encoding")
         print(f"\tEncoded data size: {encoded_size} bits")

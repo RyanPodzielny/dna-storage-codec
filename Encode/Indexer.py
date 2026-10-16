@@ -6,22 +6,19 @@ oligos, which is needed to identify them for decoding.
 import math
 from abc import abstractmethod
 from functools import lru_cache
-from typing import Final, override
+from typing import Any, Final, override
 from Encode.Methods.HuffmanCoding import Goldman
 from Encode.Methods.Encoding import Encoding
 
 class Indexer:
-    def __init__(self, num_oligos: int, width: int | None):
+    def __init__(self, width: int, *args: Any, **kwargs: Any):
         """
-        Initializes the Indexer with the number of oligos and the width of the index sequence.
-        If width is not provided, it will be determined based on the number of oligos.
+        Initializes the Indexer the width of the index sequence.
+
+        Args:
+            width: The width of the index sequence.
+            Args and kwargs are included for polymorphism, but unused
         """
-
-        self.num_oligos: int = num_oligos
-
-        # If width is not provided, determine the optimal width based on the number of oligos
-        if width is None:
-            width = self.determine_optimal_width()
         self.width: int = width
 
 
@@ -30,31 +27,31 @@ class Indexer:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
-    @abstractmethod
-    def determine_optimal_width(self) -> int:
+    @staticmethod
+    def determine_optimal_width(num_oligos: int, *args: Any, **kwargs: Any) -> int:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
     @abstractmethod
-    def rank(self, index_sequence: str, primer: str, payload: str) -> int:
+    def rank(self, index_sequence: str, *args: Any, **kwargs: Any) -> int:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
     @abstractmethod
-    def unrank(self, index: int, primer: str, payload: str) -> str:
+    def unrank(self, index: int, *args: Any, **kwargs: Any) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
 class DNAMapIndexer(Indexer):
-    def __init__(self, num_oligos: int, width: int | None):
+    def __init__(self, width: int, *args: Any, **kwargs: Any):
         """
-        Initializes the DNAMapIndexer with the number of oligos and the width of the index sequence.
+        Initializes the DNAMapIndexer with the width of the index sequence.
         
         Args:
             num_oligos: The number of oligos to index.
-            width: The width of the index sequence. If None, it will be determined based on the number of oligos.
+            width: The width of the index sequence. 
         """
-        super().__init__(num_oligos, width)
+        super().__init__(width)
 
 
     @override
@@ -69,7 +66,8 @@ class DNAMapIndexer(Indexer):
 
 
     @override
-    def determine_optimal_width(self) -> int:
+    @staticmethod
+    def determine_optimal_width(required_capacity: int) -> int:
         """
         Determines the minimum width of the index sequence required to uniquely identify a given number of oligos.
 
@@ -77,7 +75,7 @@ class DNAMapIndexer(Indexer):
             The optimal width of the index sequence.
         """
         # Each 2 bits represents 1 base, so we need to calculate the number of bits required to represent the number of oligos
-        bits_required: int = math.ceil(math.log2(self.num_oligos))
+        bits_required: int = math.ceil(math.log2(required_capacity))
 
         # Since each base is represented by 2 bits, we need to round up to the nearest even number of bits
         if bits_required % 2 != 0:
@@ -94,16 +92,23 @@ class DNAMapIndexer(Indexer):
 
 
     @override
-    def rank(self, index_sequence: str) -> int:
+    def rank(self, index_sequence: str, *args: Any, **kwargs: Any) -> int:
         """
         Calculates the rank of a given index sequence based on the DNA mapping indexing scheme.
 
         Args:
             index_sequence: The index sequence to calculate the rank for.
+            Args and kwargs are included for polymorphism, but unused
 
         Returns:
             The rank of the index sequence.
+
+        Raises:
+            ValueError: If the index sequence length does not match the expected width.
         """
+        if len(index_sequence) != self.width:
+            raise ValueError(f"Index sequence length {len(index_sequence)} does not match expected width {self.width}.")
+
         # Convert the index sequence to a binary string
         binary_string: str = ""
         for base in index_sequence:
@@ -116,18 +121,24 @@ class DNAMapIndexer(Indexer):
 
 
     @override
-    def unrank(self, index: int) -> str:
+    def unrank(self, index: int, *args: Any, **kwargs: Any) -> str:
         """
         Generates the index sequence corresponding to a given rank based on the DNA mapping indexing scheme.
 
         Args:
             index: The rank of the index sequence to generate.
-
+            Args and kwargs are included for polymorphism, but unused
+            
         Returns:
             The index sequence corresponding to the given rank.
+
+        Raises:
+            ValueError: If the index is negative or exceeds the maximum value for the given width.
         """
         # Convert the decimal index to a binary string with correct leading zeros (need x2 as each base is 2 bits)
         binary_string: str = f"{index:0{self.width * 2}b}"
+        if len(binary_string) > self.width * 2:
+            raise ValueError(f"Index {index} exceeds the maximum value for width {self.width}.")
 
         # Map the binary string to DNA bases using the DNAMap scheme
         unrank: str = ""
@@ -138,7 +149,7 @@ class DNAMapIndexer(Indexer):
 
 
 class GoldmanIndexer(Indexer):
-    def __init__(self, num_oligos: int, width: int | None):
+    def __init__(self, width: int, *args: Any, **kwargs: Any):
         """
         Initializes the GoldmanIndexer with the number of oligos and the width of the index sequence.
         
@@ -146,7 +157,7 @@ class GoldmanIndexer(Indexer):
             num_oligos: The number of oligos to index.
             width: The width of the index sequence. If None, it will be determined based on the number of oligos.
         """
-        super().__init__(num_oligos, width)
+        super().__init__(width)
 
 
     def _decimal_to_trit(self, index: int) -> str:
@@ -202,7 +213,8 @@ class GoldmanIndexer(Indexer):
     
 
     @override
-    def determine_optimal_width(self) -> int:
+    @staticmethod
+    def determine_optimal_width(required_capacity: int) -> int:
         """
         Determines the minimum width of the index sequence required to uniquely identify a given number of oligos.
 
@@ -210,20 +222,20 @@ class GoldmanIndexer(Indexer):
             The optimal width of the index sequence.
         """
         # We can easily calculate the optimal width for the Goldman indexer by using the formula:
-        #   width = ceil(log3(num_oligos))
-        width: int = math.ceil(math.log(self.num_oligos, 3))
+        #   width = ceil(log3(required_capacity))
+        width: int = math.ceil(math.log(required_capacity, 3))
         return width
 
 
     @override
-    def unrank(self, index: int, primer: str) -> str:
+    def unrank(self, index: int, primer: str, *args: Any, **kwargs: Any) -> str:
         """
         Generates the index sequence corresponding to a given rank based on the Goldman indexing scheme.
 
         Args:
             index: The rank of the index sequence to generate.
             primer: The primer sequence used in the oligo.
-            payload: The payload sequence used in the oligo.
+            Args and kwargs are included for polymorphism, but unused
 
         Returns:
             The index sequence corresponding to the given rank.
@@ -237,14 +249,14 @@ class GoldmanIndexer(Indexer):
 
 
     @override
-    def rank(self, index_sequence: str, primer: str) -> int:
+    def rank(self, index_sequence: str, primer: str, *args: Any, **kwargs: Any) -> int:
         """
         Calculates the rank of a given index sequence based on the Goldman indexing scheme.
 
         Args:
             index_sequence: The index sequence to calculate the rank for.
             primer: The primer sequence used in the oligo.
-            payload: The payload sequence used in the oligo.
+            _payload: Unused, included for polymorphism.
 
         Returns:
             The rank of the index sequence.
@@ -261,7 +273,7 @@ class GoldmanIndexer(Indexer):
 class EnumerativeIndexer(Indexer):
     ORDERED_ALPHABET: Final[tuple[str, ...]] = ('A', 'C', 'G', 'T')
     VALID_NUM: Final[int] = len(ORDERED_ALPHABET)
-    def __init__(self, num_oligos: int, width: int | None, max_run_length: int = 1):
+    def __init__(self, width: int, max_run_length: int = 1):
         """
         Initializes the EnumerativeIndexer with the number of oligos, width of the index sequence, and maximum allowed 
         homopolymer run length.
@@ -273,9 +285,8 @@ class EnumerativeIndexer(Indexer):
         recommended solution is to encode the payload first as it is the main purpose of the encoding, then use the 
         indexer.
         """
-        # Needs to be before super().__init__() because determine_optimal_width() is called in the parent
         self.max_run_length: int = max_run_length
-        super().__init__(num_oligos, width)
+        super().__init__(width)
 
 
     def _run_length(self, sequence: str, reverse: bool) -> int:
@@ -335,6 +346,8 @@ class EnumerativeIndexer(Indexer):
         primer_run: int = self._run_length(primer, reverse=True)
         payload_run: int = self._run_length(payload, reverse=False)
 
+        # Check if the primer or payload exceeds the maximum run length, which would make it impossible to generate 
+        #   valid index sequences with the max run length constraint.
         if primer_run > self.max_run_length or payload_run > self.max_run_length:
             raise ValueError("Primer or payload exceeds the maximum run length.")
 
@@ -343,7 +356,7 @@ class EnumerativeIndexer(Indexer):
 
     @lru_cache(maxsize=None)    # Makes this way faster, tradeoff with memory but a good idea for speed
     def _num_valid_placements(self, bases_left: int, same_payload_base: bool, 
-                                   index_run: int, payload_run: int) -> int:
+                                    index_run: int, payload_run: int) -> int:
         """
         Calculates the number of valid ways there are to place the next n bases left in the index sequence.
 
@@ -433,11 +446,16 @@ class EnumerativeIndexer(Indexer):
     
 
     @override
-    def determine_optimal_width(self) -> int:
+    @staticmethod
+    def determine_optimal_width(required_capacity: int, *, max_run_length: int = 1) -> int:
         """
         Determines the minimum width of the index sequence required to uniquely identify a given number of oligos, 
         considering the maximum allowed homopolymer run length.
         
+        Args:
+            required_capacity: The number of oligos to index (or just just numbers to support in general).
+            max_run_length: The maximum allowed homopolymer run length.
+
         Returns:
             The optimal width of the index sequence.
         """
@@ -446,21 +464,21 @@ class EnumerativeIndexer(Indexer):
         width: int = 1
         
         while True:
-            indexer = EnumerativeIndexer(self.num_oligos, width, max_run_length=self.max_run_length)
+            indexer = EnumerativeIndexer(width, max_run_length=max_run_length)
 
             total_valid_indices: int = indexer.calculate_total_valid_indices()
 
             # Found a width that can accommodate the number of oligos, return it
-            if total_valid_indices >= self.num_oligos:
+            if total_valid_indices >= required_capacity:
                 return width
             width += 1
 
             # Prevent infinite loop
-            if width > 100:  
+            if width > 50:  
                 raise ValueError("Unable to determine optimal width within reasonable bounds.")
 
 
-    def rank(self, index_sequence: str, primer: str, payload: str) -> int:
+    def rank(self, index_sequence: str, *, primer: str, payload: str) -> int:
         """
         Calculates the rank of a given index sequence based on the enumerative indexing scheme. Basically gives the
         index based on the sequence.
@@ -540,7 +558,7 @@ class EnumerativeIndexer(Indexer):
         return rank
         
 
-    def unrank(self, index: int, primer: str, payload: str) -> str:
+    def unrank(self, index: int, *, primer: str, payload: str) -> str:
         """
         Generates the index sequence corresponding to a given rank based on the enumerative indexing scheme.
 
@@ -568,7 +586,7 @@ class EnumerativeIndexer(Indexer):
         index_run: int = primer_run
         new_run: int = 0
 
-        # Calculate the total number of valid indices firs to determine if the given rank is valid
+        # Calculate the total number of valid indices first to determine if the given rank is valid
         total: int = self._num_valid_placements(
             self.width,                    
             previous_base == ending_base,

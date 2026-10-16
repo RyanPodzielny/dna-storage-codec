@@ -381,10 +381,11 @@ class Huffman(Encoding):
             f.write(decoded_data)
 
         return decoded_data
+    
 
 
     @override
-    def calculate_size(self, json_path: str) -> tuple[int, int]:
+    def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
         """
         Calculates the size of the encoded data and table in bits.
 
