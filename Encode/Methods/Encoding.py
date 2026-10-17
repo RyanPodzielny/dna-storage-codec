@@ -120,7 +120,7 @@ class Encoding:
     
 
     @abstractmethod
-    def encode_segments(self, data: str, payload_length: int) -> list[str]:
+    def encode_segments(self, data: str, payload_length: int, *args, **kwargs) -> list[str]:
         raise NotImplementedError("Subclasses must implement this method.")
     
 
@@ -135,12 +135,12 @@ class Encoding:
 
 
     @abstractmethod
-    def decode_segments(self, data: list[str]) -> str:
+    def decode_segments(self, data: list[str], *args, **kwargs) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
     @abstractmethod
-    def decode(self, data: str) -> str:
+    def decode(self, data: str, *args, **kwargs) -> str:
         raise NotImplementedError("Subclasses must implement this method.")
 
 

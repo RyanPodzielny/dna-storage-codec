@@ -47,7 +47,7 @@ class Huffman(Encoding):
         self.ORDER = Huffman.BINARY_ORDER
 
 
-    def count_frequencies(self, data: str, k: int = 1) -> dict[str, int]:
+    def _count_frequencies(self, data: str, k: int = 1) -> dict[str, int]:
         """
         Counts the frequency of each character in the input data.
 
@@ -78,7 +78,7 @@ class Huffman(Encoding):
         return frequencies
 
 
-    def build_tree(self, data: str, k: int = 1, add_padding: bool = False) -> None:
+    def _build_tree(self, data: str, k: int = 1, add_padding: bool = False) -> None:
         """
         Builds the Huffman tree based on the character frequencies in the input data.
 
@@ -93,7 +93,7 @@ class Huffman(Encoding):
         Raises:
             ValueError: If the input data is empty.
         """
-        frequencies: dict[str, int] = self.count_frequencies(data, k)
+        frequencies: dict[str, int] = self._count_frequencies(data, k)
 
         # Add a padding char for encoded segementing to ensure last segment is full
         if add_padding:
@@ -142,7 +142,7 @@ class Huffman(Encoding):
             self.priority_queue.enqueue(merged_node)
 
 
-    def generate_codes(self) -> dict[str, str]:
+    def _generate_codes(self) -> dict[str, str]:
         """
         Generates the Huffman codes for each DNA base pair on the constructed quaternary Huffman tree.
 
@@ -199,7 +199,10 @@ class Huffman(Encoding):
     
 
     @override
-    def encode_segments(self, data: str, payload_length: int) -> tuple[dict[str, str], list[str]]:
+    def encode_segments(self, 
+                        data: str, 
+                        payload_length: int, 
+                        *args, **kwargs) -> tuple[dict[str, str], list[str]]:
         """
         Encodes the given data using the generated Huffman codes into segments of a specified payload length.
 
@@ -213,8 +216,8 @@ class Huffman(Encoding):
         huffman_codes: dict[str, str]
         encoded_data: str
 
-        self.build_tree(data, add_padding=True)
-        huffman_codes = self.generate_codes()
+        self._build_tree(data, add_padding=True)
+        huffman_codes = self._generate_codes()
         encoded_data = "".join(huffman_codes[char] for char in data)
 
         # Split the encoded data into segments of the specified payload length
@@ -236,14 +239,15 @@ class Huffman(Encoding):
 
         Args:
             data: The string to be encoded.
+            *args and **kwargs are used to keep polymorphism with other encoding methods 
 
         Returns:
             A tuple containing the Huffman codes and the encoded data.
         """
 
         # Build tree and generate Huffman codes
-        self.build_tree(data)
-        huffman_codes: dict[str, str] = self.generate_codes()
+        self._build_tree(data)
+        huffman_codes: dict[str, str] = self._generate_codes()
         encoded_data: str = "".join(huffman_codes[char] for char in data)
 
         # Return the table and encoded data as or string of encoded data
@@ -301,13 +305,17 @@ class Huffman(Encoding):
 
 
     @override
-    def decode_segments(self, encoded_data: list[str], huffman_codes: dict[str, str]) -> list[str]:
+    def decode_segments(self, 
+                        encoded_data: list[str], 
+                        huffman_codes: dict[str, str], 
+                        *args, **kwargs) -> list[str]:
         """
         Decodes the encoded data using the provided Huffman codes.
 
         Args:
             encoded_data: A list of encoded segments to be decoded.
             huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
+            *args and **kwargs are used to keep polymorphism with other encoding methods that may require additional parameters.
 
         Returns:
             The decoded data as a list of strings, where each string corresponds to a decoded segment.
@@ -383,7 +391,6 @@ class Huffman(Encoding):
         return decoded_data
     
 
-
     @override
     def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
         """
@@ -441,7 +448,7 @@ class Trenary(Huffman):
 
 
     @override
-    def generate_codes(self) -> dict[str, str]:
+    def _generate_codes(self) -> dict[str, str]:
         """
         Generates the Huffman codes for each DNA base pair on the constructed ternary Huffman tree.
 
@@ -535,6 +542,25 @@ class BitScanQuaternary(Quaternary):
         self.VALUE_MULTIPLIER: int = 2
 
 
+    def _calculate_coding_density(self, huffman_codes: dict[str, str]) -> float:
+        """
+        Calculates the coding density of the encoded data.
+
+        Args:
+            huffman_codes: A dictionary mapping each character to its corresponding Huffman code.
+            encoded_data: The encoded data as a string.
+            original_size: The size of the original data in bits.
+
+        Returns:
+            The coding density as a float.
+        """
+        total_code_length: int = sum(len(code) for code in huffman_codes.values())
+        average_code_length: float = total_code_length / len(huffman_codes)
+        
+        coding_density: float = self.K / average_code_length
+        return coding_density
+
+
     @override
     def encode(self, data: str) -> tuple[dict[str, str], str]:
         """
@@ -542,14 +568,15 @@ class BitScanQuaternary(Quaternary):
 
         Args:
             data: The string to be encoded.
+            *args and **kwargs are used to keep polymorphism with other encoding methods
 
         Returns:
             A tuple containing the Huffman codes and the encoded data.
         """
 
         # Build tree and generate Huffman codes
-        self.build_tree(data, self.K)
-        huffman_codes: dict[str, str] = self.generate_codes()
+        self._build_tree(data, self.K)
+        huffman_codes: dict[str, str] = self._generate_codes()
         encoded_data: str = ""
 
         # Encode the data using the generated Huffman codes
@@ -568,25 +595,6 @@ class BitScanQuaternary(Quaternary):
 
         # Return the table and encoded data as or string of encoded data
         return huffman_codes, encoded_data
-
-
-    def calculate_coding_density(self, huffman_codes: dict[str, str]) -> float:
-        """
-        Calculates the coding density of the encoded data.
-
-        Args:
-            huffman_codes: A dictionary mapping each character to its corresponding Huffman code.
-            encoded_data: The encoded data as a string.
-            original_size: The size of the original data in bits.
-
-        Returns:
-            The coding density as a float.
-        """
-        total_code_length: int = sum(len(code) for code in huffman_codes.values())
-        average_code_length: float = total_code_length / len(huffman_codes)
-        
-        coding_density: float = self.K / average_code_length
-        return coding_density
 
 
     def find_optimal_k(self, in_path: str, min_k: int = 4, max_k: int = 52) -> tuple[int, float, dict[str, str], str]:
@@ -618,7 +626,7 @@ class BitScanQuaternary(Quaternary):
         for k in range(min_k, max_k + 1):
             self.K = k
             huffman_codes, encoded_data = self.encode(data)
-            density: float = self.calculate_coding_density(huffman_codes)
+            density: float = self._calculate_coding_density(huffman_codes)
 
             if density > max_density:
                 max_density = density
@@ -655,7 +663,7 @@ class Pgram(Huffman):
 
 
     @override
-    def count_frequencies(self, data: str, a: int = 10) -> dict[str, int]:
+    def _count_frequencies(self, data: str, a: int = 10) -> dict[str, int]:
         """
         Counts the frequency of each k-gram (substring of length k) in the input data.
 
@@ -691,7 +699,7 @@ class Pgram(Huffman):
 
 
     @override
-    def generate_codes(self) -> dict[str, str]:
+    def _generate_codes(self) -> dict[str, str]:
         """
         Generates the Huffman codes for each character based on the constructed Huffman tree. Odd levels are
         assigned 'A' and 'C', while even levels are assigned 'G' and 'T'. The codes are generated by traversing the tree
@@ -731,7 +739,7 @@ class Pgram(Huffman):
         return codes
 
 
-    def build_optimal_coding(self, 
+    def _build_optimal_coding(self, 
                              data: str, 
                              huffman_codes: dict[str, str],
                              payload_length: int | None = None,
@@ -816,65 +824,6 @@ class Pgram(Huffman):
 
         return coded_message, index
 
-    @override
-    def encode_segments(self, 
-                        data: str, 
-                        payload_length: int, 
-                        previous_bases: list[str]) -> tuple[dict[str, str], list[str]]:
-
-        # Build our trees and get our codes
-        self.build_tree(data, add_padding=True)
-        huffman_codes: dict[str, str] = self.generate_codes()
-
-        segments: list[str] = []
-
-        data_length: int = len(data)
-
-        encoded_message: str
-        last_data_index: int = 0
-        bases_index: int = 0
-
-        # While we still have data to encode, build the optimal coding for next segment and append it
-        while data_length > 0:
-            encoded_message, last_data_index = self.build_optimal_coding(
-                data[len(data) - data_length:], 
-                huffman_codes, 
-                payload_length, 
-                True,
-                previous_bases[bases_index]
-            )
-            segments.append(encoded_message)
-            bases_index += 1
-
-            # Keep our data length check seperated to avoid issues with the last segment being shorter than 
-            #   payload length creating an infinite loop
-            data_length -= last_data_index
-
-        # Ensure our last segment is our payload length
-        segments[-1] = self._add_padding(segments[-1], payload_length, huffman_codes)
-
-        return huffman_codes, segments
-    
-
-    @override
-    def encode(self, data: str) -> tuple[dict[str, str], str]:
-        """
-        Finds the optimal coding for the given data using p-gram encoding.
-
-        Args:
-            data: The input data to be encoded.
-            frequencies: A dictionary mapping each p-gram to its frequency in the input data.
-
-        Returns:
-            A tuple containing the Huffman codes and the encoded data.
-        """
-
-        self.build_tree(data)
-        huffman_codes: dict[str, str] = self.generate_codes()
-        encoded_message: str 
-        encoded_message, _ = self.build_optimal_coding(data, huffman_codes)
-        return huffman_codes, encoded_message
-
 
     def _get_codes(self, huffman_codes: dict[str, str], reverse: bool = True) -> tuple[dict[str, str], dict[str, str]]:
         """
@@ -932,10 +881,72 @@ class Pgram(Huffman):
     
 
     @override
+    def encode_segments(self, 
+                        data: str, 
+                        payload_length: int, 
+                        *,
+                        previous_bases: list[str]) -> tuple[dict[str, str], list[str]]:
+
+        # Build our trees and get our codes
+        self._build_tree(data, add_padding=True)
+        huffman_codes: dict[str, str] = self._generate_codes()
+
+        segments: list[str] = []
+
+        data_length: int = len(data)
+
+        encoded_message: str
+        last_data_index: int = 0
+        bases_index: int = 0
+
+        # While we still have data to encode, build the optimal coding for next segment and append it
+        while data_length > 0:
+            encoded_message, last_data_index = self._build_optimal_coding(
+                data[len(data) - data_length:], 
+                huffman_codes, 
+                payload_length, 
+                True,
+                previous_bases[bases_index]
+            )
+            segments.append(encoded_message)
+            bases_index += 1
+
+            # Keep our data length check seperated to avoid issues with the last segment being shorter than 
+            #   payload length creating an infinite loop
+            data_length -= last_data_index
+
+        # Ensure our last segment is our payload length
+        segments[-1] = self._add_padding(segments[-1], payload_length, huffman_codes)
+
+        return huffman_codes, segments
+    
+
+    @override
+    def encode(self, data: str) -> tuple[dict[str, str], str]:
+        """
+        Finds the optimal coding for the given data using p-gram encoding.
+
+        Args:
+            data: The input data to be encoded.
+            args and **kwargs are used to keep polymorphism with other encoding methods
+
+        Returns:
+            A tuple containing the Huffman codes and the encoded data.
+        """
+
+        self._build_tree(data)
+        huffman_codes: dict[str, str] = self._generate_codes()
+        encoded_message: str 
+        encoded_message, _ = self._build_optimal_coding(data, huffman_codes)
+        return huffman_codes, encoded_message
+    
+
+    @override
     def decode_segments(self, 
                         encoded_data: list[str], 
                         huffman_codes: dict[str, str], 
-                        reverse: bool = True) -> list[str]:
+                        reverse: bool = True,
+                        *args, **kwargs) -> list[str]:
         """
         Decodes the encoded data using the provided Huffman codes.
 
@@ -943,6 +954,7 @@ class Pgram(Huffman):
             encoded_data: A list of encoded segments to be decoded.
             huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
             reverse: A boolean indicating whether to reverse the Huffman codes for decoding.
+            args and **kwargs are used to keep polymorphism with other encoding methods.
 
         Returns:
             The decoded data as a list of strings, where each string corresponds to a decoded segment.
@@ -1027,8 +1039,8 @@ class Goldman(Huffman):
         Returns:
             The encoded data as a string of trits.
         """
-        self.build_tree(data)
-        huffman_codes: dict[str, str] = self.generate_codes()
+        self._build_tree(data)
+        huffman_codes: dict[str, str] = self._generate_codes()
         encoded_data: str = "".join(huffman_codes[char] for char in data)
 
         return encoded_data
@@ -1070,6 +1082,7 @@ class Goldman(Huffman):
     def encode_segments(self, 
                         data: str, 
                         payload_length: int,
+                        *,
                         previous_bases: list[str]) -> tuple[dict[str, str], list[str]]:
         """
         Encodes the given data with Goldman's rotating tree approach using the generated Huffman codes and a specified
@@ -1086,8 +1099,8 @@ class Goldman(Huffman):
         Raises:
             ValueError: If the length of the previous bases list is less than the number of segments
         """
-        self.build_tree(data, add_padding=True)
-        huffman_codes: dict[str, str] = self.generate_codes()
+        self._build_tree(data, add_padding=True)
+        huffman_codes: dict[str, str] = self._generate_codes()
         trit_encoded_data: str = "".join(huffman_codes[char] for char in data)
 
         encoded_message: list[str] = []
@@ -1122,13 +1135,13 @@ class Goldman(Huffman):
 
         Args:
             data: The string to be encoded.
+            *args and **kwargs are used to keep polymorphism with other encoding methods
 
         Returns:
             A tuple containing the Huffman codes and the encoded data.
         """
-
-        self.build_tree(data)
-        huffman_codes: dict[str, str] = self.generate_codes()
+        self._build_tree(data)
+        huffman_codes: dict[str, str] = self._generate_codes()
 
         encoded_message: str = "".join(huffman_codes[char] for char in data)
         encoded_message = self.trit_to_dna(encoded_message)
@@ -1142,6 +1155,7 @@ class Goldman(Huffman):
 
         Args:
             encoded_data: The DNA data to be mapped.
+            start_base: The starting base for the mapping.
 
         Returns:
             The a string of the mapped trits.
@@ -1171,6 +1185,7 @@ class Goldman(Huffman):
     def decode_segments(self, 
                         encoded_data: list[str], 
                         huffman_codes: dict[str, str],
+                        *,
                         payload_length: int, 
                         previous_bases: list[str]) -> list[str]:
         """
@@ -1180,6 +1195,7 @@ class Goldman(Huffman):
         Args:
             encoded_data: The encoded data to be decoded as a list of strings.
             huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
+            payload_length: The length of each segment in the encoded data.
             previous_bases: A list of previous bases (like the index or primer) for the mapping.
 
         Returns:

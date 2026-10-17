@@ -200,7 +200,7 @@ class GoldmanIndexer(Indexer):
     @override
     def calculate_total_valid_indices(self) -> int:
         """
-        Calculates the total number of valid index sequences that can be generated given the primer and payload 
+        Calculates the total number of valid index sequences that can be generated given the before and after 
         sequences, using worst case scenario for homopolymer runs.
 
         Returns:
@@ -228,43 +228,43 @@ class GoldmanIndexer(Indexer):
 
 
     @override
-    def unrank(self, index: int, primer: str, *args: Any, **kwargs: Any) -> str:
+    def unrank(self, index: int, before: str, *args: Any, **kwargs: Any) -> str:
         """
         Generates the index sequence corresponding to a given rank based on the Goldman indexing scheme.
 
         Args:
             index: The rank of the index sequence to generate.
-            primer: The primer sequence used in the oligo.
+            before: The before sequence used in the oligo.
             Args and kwargs are included for polymorphism, but unused
 
         Returns:
             The index sequence corresponding to the given rank.
         """
-        primer_end: str = primer[-1]
+        before_end: str = before[-1]
 
         # Convert decimal index to trit representation, then use Goldman mapping to convert to DNA
         trit_representation: str = self._decimal_to_trit(index)
-        unrank: str = Goldman().trit_to_dna(trit_representation, start_base=primer_end)
+        unrank: str = Goldman().trit_to_dna(trit_representation, start_base=before_end)
         return unrank
 
 
     @override
-    def rank(self, index_sequence: str, primer: str, *args: Any, **kwargs: Any) -> int:
+    def rank(self, index_sequence: str, before: str, *args: Any, **kwargs: Any) -> int:
         """
         Calculates the rank of a given index sequence based on the Goldman indexing scheme.
 
         Args:
             index_sequence: The index sequence to calculate the rank for.
-            primer: The primer sequence used in the oligo.
-            _payload: Unused, included for polymorphism.
+            before: The before sequence used in the oligo.
+            _after: Unused, included for polymorphism.
 
         Returns:
             The rank of the index sequence.
         """
-        primer_base: str = primer[-1]
+        before_base: str = before[-1]
 
         # Convert DNA bases to trits using Goldman mapping and back to decimal index
-        trit_representation: str = Goldman().dna_to_trit(index_sequence, start_base=primer_base)
+        trit_representation: str = Goldman().dna_to_trit(index_sequence, start_base=before_base)
         rank: int = self._trit_to_decimal(trit_representation)
 
         return rank
@@ -278,11 +278,11 @@ class EnumerativeIndexer(Indexer):
         Initializes the EnumerativeIndexer with the number of oligos, width of the index sequence, and maximum allowed 
         homopolymer run length.
 
-        Note: cannot be combined with state aware encoding methods as the indexer needs to know the payload as a DNA
-        sequenece, but the payload requires the previous base (which would be the index base that cannot be encoded).
+        Note: cannot be combined with state aware encoding methods as the indexer needs to know the after as a DNA
+        sequenece, but the after requires the previous base (which would be the index base that cannot be encoded).
         This circular dependency is fine, just mean Pgrams, Complementary Tree and Goldman cannot be state aware - no
         homopolymers will occur as the indexer still solves for that, just cannot be state aware together. The 
-        recommended solution is to encode the payload first as it is the main purpose of the encoding, then use the 
+        recommended solution is to encode the after first as it is the main purpose of the encoding, then use the 
         indexer.
         """
         self.max_run_length: int = max_run_length
@@ -328,43 +328,43 @@ class EnumerativeIndexer(Indexer):
 
         return run_length
 
-    def _sequence_gaurd(self, primer: str, payload: str) -> tuple[int, int]:
+    def _sequence_gaurd(self, before: str, after: str) -> tuple[int, int]:
         """
-        Validates the primer and payload sequences to ensure they are not empty and do not exceed the maximum run length.
+        Validates the before and after sequences to ensure they are not empty and do not exceed the maximum run length.
 
         Args:
-            primer: The primer sequence used in the oligo.
-            payload: The payload sequence used in the oligo.
+            before: The before sequence used in the oligo.
+            after: The after sequence used in the oligo.
 
         Raises:
-            ValueError: If the primer or payload sequences are empty, or if they exceed the maximum
+            ValueError: If the before or after sequences are empty, or if they exceed the maximum
             run length.
         """
-        if not primer or not payload:
-            raise ValueError("Primer and payload sequences cannot be empty.")
+        if not before or not after:
+            raise ValueError("Primer and after sequences cannot be empty.")
 
-        primer_run: int = self._run_length(primer, reverse=True)
-        payload_run: int = self._run_length(payload, reverse=False)
+        before_run: int = self._run_length(before, reverse=True)
+        after_run: int = self._run_length(after, reverse=False)
 
-        # Check if the primer or payload exceeds the maximum run length, which would make it impossible to generate 
+        # Check if the before or after exceeds the maximum run length, which would make it impossible to generate 
         #   valid index sequences with the max run length constraint.
-        if primer_run > self.max_run_length or payload_run > self.max_run_length:
-            raise ValueError("Primer or payload exceeds the maximum run length.")
+        if before_run > self.max_run_length or after_run > self.max_run_length:
+            raise ValueError("Primer or after exceeds the maximum run length.")
 
-        return primer_run, payload_run
+        return before_run, after_run
 
 
     @lru_cache(maxsize=None)    # Makes this way faster, tradeoff with memory but a good idea for speed
-    def _num_valid_placements(self, bases_left: int, same_payload_base: bool, 
-                                    index_run: int, payload_run: int) -> int:
+    def _num_valid_placements(self, bases_left: int, same_after_base: bool, 
+                                    index_run: int, after_run: int) -> int:
         """
         Calculates the number of valid ways there are to place the next n bases left in the index sequence.
 
         Args:
             bases_left: The number of bases left to place in the index sequence.
-            same_payload_base: A boolean indicating whether the next base is the same as the prev base in the payload.
+            same_after_base: A boolean indicating whether the next base is the same as the prev base in the after.
             index_run: The current homopolymer run length of the same base in the index sequence.
-            payload_run: The current homopolymer run length of the same base in the payload sequence.
+            after_run: The current homopolymer run length of the same base in the after sequence.
 
         Returns:
             The number of valid ways to place the next n bases.
@@ -372,41 +372,41 @@ class EnumerativeIndexer(Indexer):
 
         # Have no more nucleotides to place, meaning index is complete.
         if bases_left == 0:
-            # If not same base as payload and smaller than max run length, then we have 1 valid placement
-            if (not same_payload_base) or (index_run + payload_run <= self.max_run_length):
+            # If not same base as after and smaller than max run length, then we have 1 valid placement
+            if (not same_after_base) or (index_run + after_run <= self.max_run_length):
                 return 1
-            # Same base as payload or runlength exceeds max run length, then 0 valid placements (nothing added)
+            # Same base as after or runlength exceeds max run length, then 0 valid placements (nothing added)
             else:
                 return 0
 
         # First option: switch to a different base (3 choices, each starts new run of 1)
         valids: int = 0
 
-        # Previous base is same as payload base, so none of the bases can be the same as the payload base
-        if same_payload_base:
+        # Previous base is same as after base, so none of the bases can be the same as the after base
+        if same_after_base:
             valids = self._num_valid_placements(
                 bases_left - 1,      # One less base to place
-                False,               # Next base not same as payload nt
+                False,               # Next base not same as after nt
                 1,                   # New run of 1
-                payload_run          # Stays the same
+                after_run          # Stays the same
             ) * (self.VALID_NUM - 1) # Multiply by 3 as 3 valid bases to choose from
             
-        # Previous base is different from payload base
+        # Previous base is different from after base
         else:
-            # The next base can be the same as the payload base (1 choice, starts new run of 1)
+            # The next base can be the same as the after base (1 choice, starts new run of 1)
             valids += self._num_valid_placements(
                 bases_left - 1, # One less base to place
-                True,           # Next base is same as payload nt
+                True,           # Next base is same as after nt
                 1,              # New run of 1
-                payload_run     # Stays the same
+                after_run     # Stays the same
             ) 
 
             # The next base can be any of the other bases (2 choices, starts new run of 1)
             valids += self._num_valid_placements(
                 bases_left - 1,      # One less base to place
-                False,               # Next base not same as payload nt
+                False,               # Next base not same as after nt
                 1,                   # New run of 1
-                payload_run          # Stays the same
+                after_run          # Stays the same
             ) * (self.VALID_NUM - 2) # Multiply by 2 as 2 valid bases to choose from
 
         # Second option: continue the same base (1 choice, increases run length by 1). This creates homopolymer runs,
@@ -414,9 +414,9 @@ class EnumerativeIndexer(Indexer):
         if index_run < self.max_run_length:
             valids += self._num_valid_placements(
                 bases_left - 1,    # One less base to place                         
-                same_payload_base, # Next base is same as prev base in index
+                same_after_base, # Next base is same as prev base in index
                 index_run + 1,     # Increases run length by 1
-                payload_run        # Stays the same
+                after_run        # Stays the same
             )
 
         return valids 
@@ -424,22 +424,22 @@ class EnumerativeIndexer(Indexer):
 
     def calculate_total_valid_indices(self) -> int:
         """
-        Calculates the total number of valid index sequences that can be generated given the primer and payload 
+        Calculates the total number of valid index sequences that can be generated given the before and after 
         sequences, using worst case scenario for homopolymer runs.
 
         Returns:
             The total number of valid index sequences.
         """
-        primer_run: int = self.max_run_length
-        payload_run: int = self.max_run_length
+        before_run: int = self.max_run_length
+        after_run: int = self.max_run_length
 
-        # Calculate the total number of valid indices for the current width, assumes primer and payload are of 
+        # Calculate the total number of valid indices for the current width, assumes before and after are of 
         #   length 1, which is the worst case scenario for homopolymer runs
         total_valid_indices: int = self._num_valid_placements(
             self.width,                    
             True,
-            primer_run,                    
-            payload_run                    
+            before_run,                    
+            after_run                    
         )
 
         return total_valid_indices
@@ -462,50 +462,49 @@ class EnumerativeIndexer(Indexer):
 
         # Start with a width of 1 and increment until we find a width that can accommodate the number of oligos
         width: int = 1
-        
+        indexer = EnumerativeIndexer(width, max_run_length=max_run_length)
         while True:
-            indexer = EnumerativeIndexer(width, max_run_length=max_run_length)
-
             total_valid_indices: int = indexer.calculate_total_valid_indices()
 
             # Found a width that can accommodate the number of oligos, return it
             if total_valid_indices >= required_capacity:
                 return width
             width += 1
+            indexer.width = width
 
             # Prevent infinite loop
             if width > 50:  
                 raise ValueError("Unable to determine optimal width within reasonable bounds.")
 
 
-    def rank(self, index_sequence: str, *, primer: str, payload: str) -> int:
+    def rank(self, index_sequence: str, *, before: str, after: str) -> int:
         """
         Calculates the rank of a given index sequence based on the enumerative indexing scheme. Basically gives the
         index based on the sequence.
 
         Args:
             index_sequence: The index sequence to calculate the rank for.
-            primer: The primer sequence used in the oligo.
-            payload: The payload sequence used in the oligo.
+            before: The before sequence used in the oligo.
+            after: The sequence after the data in the oligo.
         
         Returns:
             The rank of the index sequence.
 
         Raises:
             ValueError: If the index sequence length does not match the expected width, or if the
-                primer or payload sequences are empty, or if the primer or payload exceeds the maximum run length.
+                before or after sequences are empty, or if the before or after exceeds the maximum run length.
         """
 
         if len(index_sequence) != self.width:
             raise ValueError(f"Index sequence length {len(index_sequence)} does not match expected width {self.width}.")
 
-        primer_run: int 
-        payload_run: int
-        primer_run, payload_run = self._sequence_gaurd(primer, payload)
-        previous_base: str = primer[-1]
-        ending_base: str = payload[0]
+        before_run: int 
+        after_run: int
+        before_run, after_run = self._sequence_gaurd(before, after)
+        previous_base: str = before[-1]
+        ending_base: str = after[0]
 
-        index_run: int = primer_run
+        index_run: int = before_run
         new_run: int = 0
 
         rank: int = 0
@@ -533,7 +532,7 @@ class EnumerativeIndexer(Indexer):
                         self.width - position - 1,     
                         candidate_base == ending_base,  
                         new_run,                        
-                        payload_run                      
+                        after_run                      
                     )
 
                 # We found the actual base, so we can break out of the ordered alphabet loop and move to the next p
@@ -551,39 +550,39 @@ class EnumerativeIndexer(Indexer):
             if not found:
                 raise ValueError(f"Invalid index sequence '{index_sequence}'.")
 
-        # Check the boundary between index and payload.
-        if (previous_base == ending_base) and (index_run + payload_run > self.max_run_length):
-            raise ValueError("Index sequence and payload exceed the maximum run length.")
+        # Check the boundary between index and after.
+        if (previous_base == ending_base) and (index_run + after_run > self.max_run_length):
+            raise ValueError("Index sequence and after exceed the maximum run length.")
 
         return rank
         
 
-    def unrank(self, index: int, *, primer: str, payload: str) -> str:
+    def unrank(self, index: int, *, before: str, after: str) -> str:
         """
         Generates the index sequence corresponding to a given rank based on the enumerative indexing scheme.
 
         Args:
             index: The rank of the index sequence to generate.
-            primer: The primer sequence used in the oligo.
-            payload: The payload sequence used in the oligo.
+            before: The before sequence used in the oligo.
+            after: The after sequence used in the oligo.
 
         Returns:
             The index sequence corresponding to the given rank.
 
         Raises:
-            ValueError: If the index is negative, or if the primer or payload sequences are empty
+            ValueError: If the index is negative, or if the before or after sequences are empty
         """
 
         if index < 0:
             raise ValueError("Rank cannot be negative.")
 
-        primer_run: int
-        payload_run: int 
-        primer_run, payload_run = self._sequence_gaurd(primer, payload)
-        previous_base: str = primer[-1]
-        ending_base: str = payload[0]
+        before_run: int
+        after_run: int 
+        before_run, after_run = self._sequence_gaurd(before, after)
+        previous_base: str = before[-1]
+        ending_base: str = after[0]
 
-        index_run: int = primer_run
+        index_run: int = before_run
         new_run: int = 0
 
         # Calculate the total number of valid indices first to determine if the given rank is valid
@@ -591,7 +590,7 @@ class EnumerativeIndexer(Indexer):
             self.width,                    
             previous_base == ending_base,
             index_run,
-            payload_run,
+            after_run,
         )
         if index >= total:
             raise ValueError(f"Rank {index} exceeds the total number of valid indices {total}.")
@@ -617,7 +616,7 @@ class EnumerativeIndexer(Indexer):
                     self.width - position - 1,
                     candidate_base == ending_base,
                     new_run,
-                    payload_run,
+                    after_run,
                 )
 
                 # Index lies in this block: commit to this base and move to the next position in the index sequence

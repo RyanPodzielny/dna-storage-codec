@@ -1,5 +1,6 @@
-from crc import Calculator, Configuration, Crc16, Crc32
+from fastcrc import crc16, crc32
 import reedsolo
+from typing import Callable
 from Encode.Indexer import Indexer
 
 
@@ -20,17 +21,21 @@ class CheckSum:
 
         self.inner_code: bool = inner_code
 
-        # Default to CRC-32 for checksum calculation if we have an inner_code, use CRC-16 instead. The config values are
-        #   from https://pypi.org/project/crc/
-        self.config: Configuration = Crc32.CRC32.value
+        # Default to CRC-32 for checksum calculation if we have an inner_code, use CRC-16 instead
+        #   Everything comes from: https://fastcrc.readthedocs.io/en/latest/
+        self.width: int = 0
+        self.crc_func: Callable
         if self.inner_code:
-            self.config = Crc16.XMODEM.value
+            self.crc_func = crc16.xmodem
+            self.width = 16
+        else:
+            self.crc_func = crc32.iso_hdlc
+            self.width = 32
 
-        self.crc: Calculator = Calculator(self.config)
 
         # Bit shift left to get 2^required_width, which is number of unique values we can have
         self.indexer: Indexer = indexer(
-            width=indexer.determine_optimal_width(1 << self.config.width),
+            width=indexer.determine_optimal_width(1 << self.width),
             max_run_length=max_run_length
         )
 
@@ -54,7 +59,7 @@ class CheckSum:
             int: The length of the checksum in bases
         """
 
-        return self.config.width
+        return self.width
 
 
     def calculate_checksum(self, data: str) -> int:
@@ -62,15 +67,15 @@ class CheckSum:
         Calculates the checksum for the given data.
 
         Args:
-            data: The index + payload data for which the checksum is to be calculated.
+            data: The index + after data for which the checksum is to be calculated.
 
         Returns:
             int: The calculated checksum.
         """
         # Convert data into bytes
-        byte_stream: bytes = data.encode('utf-8')
+        byte_stream: bytes = data.encode("utf-8")
 
-        return self.crc.checksum(byte_stream)
+        return self.crc_func(byte_stream)
 
 
     def create_checksum_segments(self, unencoded_data: list[str]) -> list[int]:
@@ -92,80 +97,83 @@ class CheckSum:
         return checksums
 
 
-    def verify_checksum(self, data: str) -> bool:
+    def verify_checksum(self, data: str, checksum: int) -> bool:
         """
         Verifies the checksum of the provided data.
 
         Args:
             data: The data string with the appended checksum.
+            checksum: The checksum to verify against.
 
         Returns:
             bool: True if the checksum is valid, False otherwise.
         """
-        # Extract the original data and the provided checksum
-        provided_checksum: str = data[-self.get_checksum_length():]
-        original_data: str = data[:-self.get_checksum_length()]
 
         # Calculate the checksum for the original data
-        calculated_checksum: int = self.calculate_checksum(original_data)
+        calculated_checksum: int = self.calculate_checksum(data)
 
         # Compare the calculated checksum with the provided checksum
-        return str(calculated_checksum) == provided_checksum
+        return calculated_checksum == checksum
 
 
-    def encode_to_dna(self, checksum: int, primer: str, payload: str) -> str:
+
+    def encode_to_dna(self, checksum: int, before_sequence: str, after_sequence: str) -> str:
         """
         Converts the checksum integer to a DNA sequence.
 
         Args:
             checksum: The checksum integer to be converted.
-            primer: The primer sequence.
-            payload: The payload sequence.
+            before_sequence: The sequence before the checksum in the oligo.
+            after_sequence: The sequence after the checksum in the oligo.
             indexer: The indexer to use for the conversion.
 
         Returns:
             str: The corresponding DNA sequence.
         """
         # Convert the checksum integer to a DNA sequence using the indexer
-        dna_sequence: str = self.indexer.unrank(checksum, primer=primer, payload=payload)
+        dna_sequence: str = self.indexer.unrank(checksum, 
+                                                before=before_sequence, 
+                                                after=after_sequence)
 
         return dna_sequence
 
 
-    def decode_from_dna(self, dna_sequence: str, primer: str, payload: str) -> int:
+
+    def decode_from_dna(self, dna_sequence: str, before_sequence: str, after_sequence: str) -> int:
         """
         Converts a DNA sequence back to the corresponding checksum integer.
 
         Args:
             dna_sequence: The DNA sequence to be converted.
-            primer: The primer sequence.
-            payload: The payload sequence.
+            before_sequence: The sequence before the checksum in the oligo.
+            after_sequence: The sequence after the checksum in the oligo.
             indexer: The indexer to use for the conversion.
 
         Returns:
             int: The corresponding checksum integer.
         """
         # Convert the DNA sequence back to the checksum integer using the indexer
-        checksum: int = self.indexer.rank(dna_sequence, primer=primer, payload=payload)
+        checksum: int = self.indexer.rank(dna_sequence, 
+                                          before=before_sequence, 
+                                          after=after_sequence
+                                          )
 
         return checksum
 
 
 class ReedSolomon:
     """
-    A class for Reed-Solomon error correction. This is a placeholder for the actual implementation.
+    Reed-Solomon error correction for DNA strands.
     """
-
-    def __init__(self, symbols: int, information: int):
+    def __init__(self, parity_bytes: int):
         """
         Initializes the ReedSolomon instance.
 
         Args:
-            symbols: The total number of symbols in the codeword.
-            information: The number of information symbols in the codeword.
+            parity_bytes: The number of Reed-Solomon parity bytes to append.
         """
-        self.symbols: int = symbols
-        self.information: int = information
+        if not 1 <= parity_bytes <= 254:
+            raise ValueError("parity_bytes must be between 1 and 254.")
 
-
-        self.RSCodec: reedsolo.RSCodec = reedsolo.RSCodec(nsym=self.symbols - self.information)
+        self.parity_bytes: int = parity_bytes
+        self.RSCodec: reedsolo.RSCodec = reedsolo.RSCodec(parity_bytes)

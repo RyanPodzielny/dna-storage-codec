@@ -72,13 +72,14 @@ class DNAMap(Encoding):
 
 
     @override
-    def encode_segments(self, binary_string: str, payload_length: int) -> list[str]:
+    def encode_segments(self, binary_string: str, payload_length: int, *args, **kwargs) -> list[str]:
         """
         Encodes a binary string into DNA segments of a specified payload length.
 
         Args:
             binary_string: The binary string to be encoded.
             payload_length: The length of each DNA segment.
+            *args and **kwargs are used to keep polymorphism with other encoding methods
 
         Returns:
             A list of DNA segments, each of the specified payload length.
@@ -197,13 +198,14 @@ class DNAMap(Encoding):
 
 
     @override
-    def decode(self, dna_string: str, has_padding: bool) -> str:
+    def decode(self, dna_string: str, has_padding: bool, *args, **kwargs) -> str:
         """
         Decodes a DNA sequence back to a binary string.
 
         Args:
             dna_string: The DNA sequence to be decoded.
             has_padding: A boolean indicating whether padding was added during encoding.
+            args and kwargs are used to keep polymorphism with other encoding methods
 
         Returns:
             The decoded binary string.
@@ -221,13 +223,14 @@ class DNAMap(Encoding):
 
 
     @override
-    def decode_to_file(self, json_path: str, out_path: str, as_binary: bool = True) -> str: 
+    def decode_to_file(self, json_path: str, out_path: str, *args, **kwargs) -> str: 
         """
         Decodes a DNA sequence from a file back to a binary string and writes it to another file.
 
         Args:
             json_path: The path to the input JSON file containing the encoded DNA sequence and padding information.
             out_path: The path to the output file where the decoded binary string will be written.
+            *args and **kwargs used to keep polymorphism 
 
         Returns:
             The decoded binary string.
@@ -237,7 +240,7 @@ class DNAMap(Encoding):
         dna_string, has_padding = self.read_json_table(json_path)
 
         # Decode the DNA string back to binary and then to ASCII
-        binary_string: str = self.decode(dna_string, has_padding)
+        binary_string: str = self.decode(dna_string, has_padding=has_padding)
         decoded_data: str = Encoding.binary_to_ascii(binary_string)
 
         # Write the decoded data to the output file
@@ -317,13 +320,17 @@ class DNAMapHuffman(DNAMap):
 
 
     @override
-    def encode_segments(self, data: str, payload_length: int) -> tuple[dict[str, str], list[str], bool]:
+    def encode_segments(self, 
+                        data: str, 
+                        payload_length: int, 
+                        *args, **kwargs) -> tuple[dict[str, str], list[str], bool]:
         """
         Encodes a binary string into DNA segments of a specified payload length using Huffman coding.
 
         Args:
             data: The raw ascii string to be encoded.
             payload_length: The length of each DNA segment.
+            *args and **kwargs are used to keep polymorphism with other encoding methods
 
         Returns:
             A tuple containing a dictionary of Huffman codes and a list of DNA segments, each of the specified payload length.
@@ -356,6 +363,7 @@ class DNAMapHuffman(DNAMap):
 
         Args:
             data: The ascii string to be encoded.
+            *args and **kwargs are used to keep polymorphism with other encoding methods
         
         Returns:
             A tuple containing the encoded DNA sequence, a boolean indicating whether padding was added during encoding,
@@ -408,7 +416,7 @@ class DNAMapHuffman(DNAMap):
 
 
     @override
-    def decode_segments(self, encoded_data: list[str]) -> list[str]:
+    def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
         """
         Decodes a list of DNA segments back into binary. DOES NOT RETURN HUFFMAN DECODED, NEEDS TO BE DECODED AFTER.
         Since we cannot decode by segment, we need to decode the entire string after decoding the segments. The decode 
@@ -417,6 +425,7 @@ class DNAMapHuffman(DNAMap):
 
         Args:
             encoded_data: A list of DNA segments to be decoded.
+            *args and **kwargs used to keep polymorphism
 
         Returns:
             The decoded binary strings BEFORE Huffman decoding, which can then be decoded using the Huffman codes.
@@ -426,7 +435,7 @@ class DNAMapHuffman(DNAMap):
         
 
     @override
-    def decode(self, encoded_data: str, huffman_codes: dict[str, str], has_padding: bool) -> str:
+    def decode(self, encoded_data: str, huffman_codes: dict[str, str], has_padding: bool, *args, **kwargs) -> str:
         """
         Decodes a DNA sequence back to a binary string using Huffman coding.
 
@@ -434,11 +443,12 @@ class DNAMapHuffman(DNAMap):
             encoded_data: The DNA sequence to be decoded.
             huffman_codes: A dictionary of Huffman codes used for decoding.
             has_padding: A boolean indicating whether padding was added during encoding.
+            *args and **kwargs used to keep polymorphism
 
         Returns:
             The decoded binary string.
         """
-        binary_string: str = super().decode(encoded_data, has_padding)
+        binary_string: str = super().decode(encoded_data, has_padding=has_padding)
         ascii_string: str = Encoding.binary_to_ascii(binary_string)
         decoded_data: str = Huffman().decode(ascii_string, huffman_codes)
 
@@ -471,7 +481,7 @@ class DNAMapHuffman(DNAMap):
         dna_string, huffman_codes, has_padding = self.read_json_table(json_path)
 
         # Decode the DNA string back to binary then decode binary back to original
-        binary_string: str = super().decode(dna_string, has_padding)
+        binary_string: str = super().decode(dna_string, has_padding=has_padding)
         
         # Should already be in binary, but if not, convert to binary first
         if as_binary:
