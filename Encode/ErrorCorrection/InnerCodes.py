@@ -1,7 +1,8 @@
-from fastcrc import crc16, crc32
 import reedsolo
+from fastcrc import crc16, crc32
 from typing import Callable
 from Encode.Indexer import Indexer
+from Encode.Methods.Encoding import Encoding
 
 
 class CheckSum:
@@ -35,7 +36,7 @@ class CheckSum:
 
         # Bit shift left to get 2^required_width, which is number of unique values we can have
         self.indexer: Indexer = indexer(
-            width=indexer.determine_optimal_width(1 << self.width),
+            width=indexer.determine_optimal_width(2**self.width),
             max_run_length=max_run_length
         )
 
@@ -73,7 +74,7 @@ class CheckSum:
             int: The calculated checksum.
         """
         # Convert data into bytes
-        byte_stream: bytes = data.encode("utf-8")
+        byte_stream: bytes = bytes(data, 'utf-8')
 
         return self.crc_func(byte_stream)
 
@@ -155,8 +156,7 @@ class CheckSum:
         # Convert the DNA sequence back to the checksum integer using the indexer
         checksum: int = self.indexer.rank(dna_sequence, 
                                           before=before_sequence, 
-                                          after=after_sequence
-                                          )
+                                          after=after_sequence)
 
         return checksum
 
@@ -165,15 +165,190 @@ class ReedSolomon:
     """
     Reed-Solomon error correction for DNA strands.
     """
-    def __init__(self, parity_bytes: int):
+    # Padding base for Reed-Solomon encoding
+    RS_PADDING: str = 'A' 
+
+    def __init__(self, parity_bytes: int, indexer: type[Indexer] = Indexer, max_run_length: int | None = None):
         """
         Initializes the ReedSolomon instance.
 
         Args:
             parity_bytes: The number of Reed-Solomon parity bytes to append.
         """
-        if not 1 <= parity_bytes <= 254:
-            raise ValueError("parity_bytes must be between 1 and 254.")
+        # Need a hard cap on the capacity. We need to represent them in a fixed width scheme for our dna, and we are 
+        #   using a byte representation combination to achieve this. Becomes computationally expensive and impractical.
+        if not 1 <= parity_bytes <= 8:
+            raise ValueError("parity_bytes must be between 1 and 8.")
 
         self.parity_bytes: int = parity_bytes
         self.RSCodec: reedsolo.RSCodec = reedsolo.RSCodec(parity_bytes)
+
+        # Going to encode each base as the byte we have - so maxium of 256 numbers per byte
+        self.indexer: Indexer = indexer(
+            width=indexer.determine_optimal_width(2**8),
+            max_run_length=max_run_length
+        )
+
+
+    def _to_bytes(self, encoded_data: str) -> bytes:
+        """
+        Converts a DNA sequence to bytes with virtual padding.
+
+        Args:
+            data: The DNA sequence to be converted.
+
+        Returns:
+            bytes: The corresponding byte representation.
+        """
+        # We will treat each base as 2 bits, so we can pack 4 bases into a single byte. We are encoding over the DNA -
+        #   we do not care about the actual information it is storing, we just want to be able to correct errors in the 
+        #   DNA sequence. Padding is necessary, but its virtual and will not actually show up into the DNA sequence. We
+        #   use Reed-Solomon with a GF(256) field, which means we must store the data in the same size as a byte. 
+        #   Techinally could just use each base as a byte, but it limits oligo length and is very wasteful. This way we
+        #   can extend how long each oligo can be and still have error correction (e.g. 200 bases = 50 bytes, instead of 
+        #   200 bytes).
+
+        length: int = len(encoded_data)
+
+        # Pad the data to a multiple of 4 bases - this is just virtual, nothing is added to sequence
+        if length % 4 != 0:
+            padding_length: int = 4 - (length % 4)
+            encoded_data += self.RS_PADDING * padding_length
+            length += padding_length
+
+        # Convert the DNA sequence to bytes - our Encoding class has this but in str form, so we will just use that
+        bit_stream: str = "".join(Encoding.REVERSE_DNA_MAP[base] for base in encoded_data)
+
+        # Convert the bit stream to bytes
+        byte_stream: bytes = bytes()
+        for index in range(0, len(bit_stream), 8):
+            byte: str = bit_stream[index:index+8]
+            byte_stream += bytes([int(byte, 2)])
+
+        return byte_stream
+
+
+    def _encode(self, encoded_data: str) -> list[int]:
+        """
+        Encodes the given data using Reed-Solomon error correction.
+
+        Args:
+            encoded_data: The data to be encoded with parity. We assume its the [index | payload | checksum] sequence.
+
+        Returns:
+            The list of Reed-Solomon parity bytes.
+        """
+       
+        byte_stream: bytes = self._to_bytes(encoded_data)
+
+        # Return only the parity bytes
+        return list(self.RSCodec.encode(byte_stream)[-self.parity_bytes:])
+
+
+    def encode_to_dna(self, encoded_data: str, before_sequence: str, after_sequence: str) -> str:
+        """
+        Converts the Reed-Solomon parity bytes integer to a DNA sequence.
+
+        Args:
+            encoded_data: The data to be encoded with parity. We assume its the [index | payload | checksum] sequence.
+            before_sequence: The sequence before the parity bytes in the oligo.
+            after_sequence: The sequence after the parity bytes in the oligo.
+
+        Returns:
+            The corresponding DNA sequence to the .
+        """
+        parity_bytes: list[int] = self._encode(encoded_data)
+        dna_sequence: str = ""
+
+        for byte in parity_bytes:
+            dna_sequence += self.indexer.unrank(byte, 
+                                                before=before_sequence, 
+                                                after=after_sequence)
+            # Update the before_sequence for the next byte
+            before_sequence = dna_sequence 
+
+        return dna_sequence
+
+
+    def _decode(self, encoded_data: str, parity_bytes: bytes) -> str:
+        """
+        Decodes the given data using Reed-Solomon error correction.
+
+        Args:
+            encoded_data: The data to be decoded with parity. We assume its the [index | payload | checksum] sequence.
+
+        Returns:
+            The decoded fixed data as a string.
+
+        Raises:
+            ReedSolomonError: If the data cannot be corrected.
+        """
+        byte_stream: bytes = self._to_bytes(encoded_data) + parity_bytes
+
+        items: list[list[int]] = []
+        for item in self.RSCodec.decode(byte_stream):
+            items.append(list(item))
+
+        decoded_bytes: bytes = bytes(items[0])
+
+        # Convert the decoded bytes back to a DNA sequence
+        bit_stream: str = "".join(f"{byte:08b}" for byte in decoded_bytes)
+        decoded_sequence: str = ""
+        for index in range(0, len(bit_stream), 2):
+            bits: str = bit_stream[index:index+2]
+            decoded_sequence += Encoding.DNA_MAP[bits]
+
+        return decoded_sequence
+
+
+    def decode_from_dna(self, 
+                        encodeded_data: str, 
+                        parity_dna_sequence: str, 
+                        before_sequence: str, after_sequence: str) -> str:
+        """
+        Converts a DNA sequence back to the corresponding Reed-Solomon parity bytes integer.
+
+        Args:
+            encodeded_data: The DNA sequence to be converted back to Reed-Solomon parity bytes.
+            parity_dna_sequence: The DNA sequence representing the Reed-Solomon parity bytes.
+            before_sequence: The sequence before the parity bytes in the oligo.
+            after_sequence: The sequence after the parity bytes in the oligo.
+
+        Returns:
+            The corresponding Reed-Solomon parity bytes integer.
+        """
+        parity_bytes: bytes = bytes()
+
+        # Each parity byte is represented by a DNA sequence of length equal to the indexer's width
+        for index in range(self.parity_bytes):
+            # Get the exact DNA sequence for the current parity byte
+            start: int = index * self.indexer.width
+            end: int = start + self.indexer.width
+            current_sequence: str = parity_dna_sequence[start:end]
+
+            parity_byte: int = self.indexer.rank(current_sequence, 
+                                                 before=before_sequence, 
+                                                 after=after_sequence)
+
+            # Update new start sequence for the next parity byte to be decoded
+            before_sequence = current_sequence
+            
+            parity_bytes += bytes([parity_byte])
+
+        decoded_sequence: str = self._decode(encodeded_data, parity_bytes)
+    
+        return decoded_sequence
+
+
+    def get_dna_bases(self) -> int:
+        """
+        Gets the length of the Reed-Solomon parity bytes in bases.
+
+        Returns:
+            int: The length of the Reed-Solomon parity bytes in bases.
+        """
+        return self.indexer.width
+
+
+class Hedges:
+    pass

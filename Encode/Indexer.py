@@ -341,7 +341,7 @@ class EnumerativeIndexer(Indexer):
             run length.
         """
         if not before or not after:
-            raise ValueError("Primer and after sequences cannot be empty.")
+            raise ValueError("Before and after sequences cannot be empty.")
 
         before_run: int = self._run_length(before, reverse=True)
         after_run: int = self._run_length(after, reverse=False)
@@ -349,7 +349,7 @@ class EnumerativeIndexer(Indexer):
         # Check if the before or after exceeds the maximum run length, which would make it impossible to generate 
         #   valid index sequences with the max run length constraint.
         if before_run > self.max_run_length or after_run > self.max_run_length:
-            raise ValueError("Primer or after exceeds the maximum run length.")
+            raise ValueError("Before or after sequences exceed the maximum run length.")
 
         return before_run, after_run
 
@@ -388,7 +388,7 @@ class EnumerativeIndexer(Indexer):
                 bases_left - 1,      # One less base to place
                 False,               # Next base not same as after nt
                 1,                   # New run of 1
-                after_run          # Stays the same
+                after_run            # Stays the same
             ) * (self.VALID_NUM - 1) # Multiply by 3 as 3 valid bases to choose from
             
         # Previous base is different from after base
@@ -398,7 +398,7 @@ class EnumerativeIndexer(Indexer):
                 bases_left - 1, # One less base to place
                 True,           # Next base is same as after nt
                 1,              # New run of 1
-                after_run     # Stays the same
+                after_run       # Stays the same
             ) 
 
             # The next base can be any of the other bases (2 choices, starts new run of 1)
@@ -406,7 +406,7 @@ class EnumerativeIndexer(Indexer):
                 bases_left - 1,      # One less base to place
                 False,               # Next base not same as after nt
                 1,                   # New run of 1
-                after_run          # Stays the same
+                after_run            # Stays the same
             ) * (self.VALID_NUM - 2) # Multiply by 2 as 2 valid bases to choose from
 
         # Second option: continue the same base (1 choice, increases run length by 1). This creates homopolymer runs,
