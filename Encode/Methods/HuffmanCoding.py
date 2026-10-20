@@ -663,6 +663,37 @@ class Pgram(Huffman):
 
 
     @override
+    def _add_padding(self, segment: str, payload_length: int, huffman_codes: dict[str, str]) -> str:
+        """
+        Adds padding to the last segment if it is shorter than the specified payload length.
+
+        Args:
+            segment: The last segment of encoded data that may require padding.
+            payload_length: The desired length of each segment.
+            huffman_codes: A dictionary mapping each character to its corresponding Huffman code.
+        
+        Returns:
+            The segment with added padding if necessary.
+        """
+        # Get the padding character from the Huffman codes
+        padding_code: str = huffman_codes[Huffman.CHUNKING_PADDING_CHAR]
+
+        new_padding_code: str = ""
+        # If segments last character is the same as padding character, take the complement of the entire padding char
+        if segment[-1] == padding_code[0]:
+            for base in padding_code:
+                new_padding_code += self.COMPLEMENT[base]
+            padding_code = new_padding_code
+            
+        if len(segment) < payload_length:
+            padding_length: int = payload_length - len(segment)
+            segment += padding_code * padding_length
+        segment = segment[:payload_length]
+        
+        return segment
+
+
+    @override
     def _count_frequencies(self, data: str, a: int = 10) -> dict[str, int]:
         """
         Counts the frequency of each k-gram (substring of length k) in the input data.
@@ -769,7 +800,6 @@ class Pgram(Huffman):
         if payload_length is not None and payload_length <= 0:
             raise ValueError("Payload length must be a positive integer.")
 
-    
         if not payload_length:
             payload_length = len(data)
 
@@ -777,7 +807,7 @@ class Pgram(Huffman):
         index: int = 0
 
         # Check to see if we are starting with an even or odd level based on the previous base
-        is_complementary: bool = True if previous_base in self.ODD else False
+        is_complementary: bool = False if previous_base in self.ODD else True
 
         # For every pos in data, find the substring of length 1 to M that has best ration 
         while index < len(data):

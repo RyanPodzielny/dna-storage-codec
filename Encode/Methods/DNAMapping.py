@@ -174,12 +174,13 @@ class DNAMap(Encoding):
 
 
     @override
-    def decode_segments(self, encoded_data: list[str]) -> list[str]:
+    def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
         """
         Decodes a list of DNA segments back into binary strings.
 
         Args:
             encoded_data: A list of DNA segments to be decoded.
+            *args and **kwargs used to keep polymorphism
         
         Returns:
             A list of binary strings corresponding to the decoded DNA segments.

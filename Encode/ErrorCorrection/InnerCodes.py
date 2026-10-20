@@ -36,7 +36,7 @@ class CheckSum:
 
         # Bit shift left to get 2^required_width, which is number of unique values we can have
         self.indexer: Indexer = indexer(
-            width=indexer.determine_optimal_width(2**self.width),
+            width=indexer.determine_optimal_width(1 <<self.width),
             max_run_length=max_run_length
         )
 
@@ -185,7 +185,7 @@ class ReedSolomon:
 
         # Going to encode each base as the byte we have - so maxium of 256 numbers per byte
         self.indexer: Indexer = indexer(
-            width=indexer.determine_optimal_width(2**8),
+            width=indexer.determine_optimal_width(1 <<8),
             max_run_length=max_run_length
         )
 
@@ -270,15 +270,19 @@ class ReedSolomon:
         return dna_sequence
 
 
-    def _decode(self, encoded_data: str, parity_bytes: bytes) -> str:
+
+
+    def _decode(self, encoded_data: str, parity_bytes: bytes, sequence_length: int) -> str:
         """
         Decodes the given data using Reed-Solomon error correction.
 
         Args:
             encoded_data: The data to be decoded with parity. We assume its the [index | payload | checksum] sequence.
+            parity_bytes: The Reed-Solomon parity bytes to be used for error correction.
+            sequence_length: The length of the original sequence [index | payload | checksum] without the parity bytes.
 
         Returns:
-            The decoded fixed data as a string.
+            The decoded data without the parity bytes (index + payload + checksum).
 
         Raises:
             ReedSolomonError: If the data cannot be corrected.
@@ -297,6 +301,10 @@ class ReedSolomon:
         for index in range(0, len(bit_stream), 2):
             bits: str = bit_stream[index:index+2]
             decoded_sequence += Encoding.DNA_MAP[bits]
+
+        # If the decoded sequence is longer than the original sequence length, truncate it - means padding showing
+        if len(decoded_sequence) > sequence_length:
+            decoded_sequence = decoded_sequence[:sequence_length]
 
         return decoded_sequence
 
@@ -332,10 +340,10 @@ class ReedSolomon:
 
             # Update new start sequence for the next parity byte to be decoded
             before_sequence = current_sequence
-            
+
             parity_bytes += bytes([parity_byte])
 
-        decoded_sequence: str = self._decode(encodeded_data, parity_bytes)
+        decoded_sequence: str = self._decode(encodeded_data, parity_bytes, len(encodeded_data))
     
         return decoded_sequence
 
@@ -347,8 +355,4 @@ class ReedSolomon:
         Returns:
             int: The length of the Reed-Solomon parity bytes in bases.
         """
-        return self.indexer.width
-
-
-class Hedges:
-    pass
+        return self.indexer.width * self.parity_bytes
