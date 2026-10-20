@@ -29,7 +29,7 @@ class OligoFramer:
             correction_bases += self.inner_error_correction.get_dna_bases()
         if self.include_checksum:
             self.checksum = CheckSum(type(self.indexer), self.inner_error_correction is not None, max_run_length=1)
-            correction_bases += self.checksum.get_checksum_bases()
+            correction_bases += self.checksum.get_dna_bases()
 
         self.payload_length: int = self.oligo_length - len(self.start_primer) - self.indexer.width -\
                                    correction_bases - len(self.end_primer)

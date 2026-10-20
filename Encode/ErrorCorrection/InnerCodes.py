@@ -41,7 +41,7 @@ class CheckSum:
         )
 
 
-    def get_checksum_bases(self) -> int:
+    def get_dna_bases(self) -> int:
         """
         Gets the length of bits used for the checksum based on the configuration,
 
@@ -177,20 +177,21 @@ class ReedSolomon:
         """
         # Need a hard cap on the capacity. We need to represent them in a fixed width scheme for our dna, and we are 
         #   using a byte representation combination to achieve this. Becomes computationally expensive and impractical.
-        if not 1 <= parity_bytes <= 8:
-            raise ValueError("parity_bytes must be between 1 and 8.")
+        # Need at least 2 parity bytes to correct 1 error, and 16 is just the practical limit.
+        if not 2 <= parity_bytes <= 16:
+            raise ValueError("parity_bytes must be between 2 and 16.")
 
         self.parity_bytes: int = parity_bytes
         self.RSCodec: reedsolo.RSCodec = reedsolo.RSCodec(parity_bytes)
 
         # Going to encode each base as the byte we have - so maxium of 256 numbers per byte
         self.indexer: Indexer = indexer(
-            width=indexer.determine_optimal_width(1 <<8),
+            width=indexer.determine_optimal_width(1 << 8),
             max_run_length=max_run_length
         )
 
 
-    def _to_bytes(self, encoded_data: str) -> bytes:
+    def _to_bytes(self, encoded_data: str) -> bytearray:
         """
         Converts a DNA sequence to bytes with virtual padding.
 
@@ -220,7 +221,7 @@ class ReedSolomon:
         bit_stream: str = "".join(Encoding.REVERSE_DNA_MAP[base] for base in encoded_data)
 
         # Convert the bit stream to bytes
-        byte_stream: bytes = bytes()
+        byte_stream: bytearray = bytearray()
         for index in range(0, len(bit_stream), 8):
             byte: str = bit_stream[index:index+8]
             byte_stream += bytes([int(byte, 2)])
@@ -239,7 +240,7 @@ class ReedSolomon:
             The list of Reed-Solomon parity bytes.
         """
        
-        byte_stream: bytes = self._to_bytes(encoded_data)
+        byte_stream: bytearray = self._to_bytes(encoded_data)
 
         # Return only the parity bytes
         return list(self.RSCodec.encode(byte_stream)[-self.parity_bytes:])
@@ -253,7 +254,7 @@ class ReedSolomon:
             encoded_data: The data to be encoded with parity. We assume its the [index | payload | checksum] sequence.
             before_sequence: The sequence before the parity bytes in the oligo.
             after_sequence: The sequence after the parity bytes in the oligo.
-
+    
         Returns:
             The corresponding DNA sequence to the .
         """
@@ -270,9 +271,7 @@ class ReedSolomon:
         return dna_sequence
 
 
-
-
-    def _decode(self, encoded_data: str, parity_bytes: bytes, sequence_length: int) -> str:
+    def _decode(self, encoded_data: str, parity_bytes: bytearray, sequence_length: int, erasures: list[int]) -> str:
         """
         Decodes the given data using Reed-Solomon error correction.
 
@@ -280,6 +279,7 @@ class ReedSolomon:
             encoded_data: The data to be decoded with parity. We assume its the [index | payload | checksum] sequence.
             parity_bytes: The Reed-Solomon parity bytes to be used for error correction.
             sequence_length: The length of the original sequence [index | payload | checksum] without the parity bytes.
+            erasures: The positions of the erasures in the parity sequence, i.e. known to be incorrect.
 
         Returns:
             The decoded data without the parity bytes (index + payload + checksum).
@@ -287,13 +287,17 @@ class ReedSolomon:
         Raises:
             ReedSolomonError: If the data cannot be corrected.
         """
-        byte_stream: bytes = self._to_bytes(encoded_data) + parity_bytes
+        byte_stream: bytearray = self._to_bytes(encoded_data)
+        stream_length: int = len(byte_stream)
 
-        items: list[list[int]] = []
-        for item in self.RSCodec.decode(byte_stream):
-            items.append(list(item))
+        # Record the positions of the erasures in the byte stream
+        erase_positions: list[int] = [stream_length + erasure for erasure in erasures]
 
-        decoded_bytes: bytes = bytes(items[0])
+        # Add rest of the parity bytes
+        byte_stream += parity_bytes
+
+        # Get only the decoded bytes, discard everything else
+        decoded_bytes: bytearray = bytearray(self.RSCodec.decode(byte_stream, erase_pos=erase_positions)[0])
 
         # Convert the decoded bytes back to a DNA sequence
         bit_stream: str = "".join(f"{byte:08b}" for byte in decoded_bytes)
@@ -325,7 +329,10 @@ class ReedSolomon:
         Returns:
             The corresponding Reed-Solomon parity bytes integer.
         """
-        parity_bytes: bytes = bytes()
+        parity_bytes: bytearray = bytearray()
+
+        # Incase we have unrecoverable parity errors (cannot rank them), mark that location for reedsolo decode
+        erasures: list[int] = []
 
         # Each parity byte is represented by a DNA sequence of length equal to the indexer's width
         for index in range(self.parity_bytes):
@@ -334,17 +341,28 @@ class ReedSolomon:
             end: int = start + self.indexer.width
             current_sequence: str = parity_dna_sequence[start:end]
 
-            parity_byte: int = self.indexer.rank(current_sequence, 
-                                                 before=before_sequence, 
-                                                 after=after_sequence)
+            parity_byte: int = 0
+            try:
+                parity_byte: int = self.indexer.rank(current_sequence, 
+                                                    before=before_sequence, 
+                                                    after=after_sequence)
+
+                # Can't decode, treat as an erasure
+                if not (0 <= parity_byte < 256):
+                    raise ValueError(f"Decoded parity byte {parity_byte} is out of valid range.")
+
+            # TODO: Make this more robust with our own errors
+            except ValueError as _:
+                parity_byte = 0
+                erasures.append(index)
 
             # Update new start sequence for the next parity byte to be decoded
             before_sequence = current_sequence
 
-            parity_bytes += bytes([parity_byte])
+            parity_bytes.append(parity_byte)
 
-        decoded_sequence: str = self._decode(encodeded_data, parity_bytes, len(encodeded_data))
-    
+        decoded_sequence: str = self._decode(encodeded_data, parity_bytes, len(encodeded_data), erasures)
+
         return decoded_sequence
 
 
