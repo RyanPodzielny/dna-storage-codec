@@ -2,9 +2,9 @@
 This module contains functions to test the encoding and decoding of files using Huffman coding and DNA mapping.
 """
 
-import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from Encode.Methods.Encoding import Encoding
 from Encode.Methods.HuffmanCoding import Goldman, Huffman, BitScanQuaternary, Pgram, Quaternary, Trenary
 from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
@@ -55,8 +55,8 @@ def test_encoding(in_path: str, encoded_dir: str, decoded_dir: str, encoding: En
         origin_path = in_path
 
     # Create the encoded and decoded paths
-    encoded_path: str = os.path.join(encoded_dir, encoding.__class__.__name__ + "_encoded.json")
-    decoded_path: str = os.path.join(decoded_dir, encoding.__class__.__name__ + "_decoded.txt")
+    encoded_path: str = str(Path(encoded_dir) / (encoding.__class__.__name__ + "_encoded.json"))
+    decoded_path: str = str(Path(decoded_dir) / (encoding.__class__.__name__ + "_decoded.txt"))
 
     encoding.encode_from_file(in_path, encoded_path, as_binary=as_binary)
     encoding.decode_to_file(encoded_path, decoded_path, as_binary=as_binary)
@@ -88,17 +88,17 @@ def test_file(original_dir: str, encoded_dir: str, decoded_dir: str, file_name: 
         FileNotFoundError: If the input file does not exist.
     """
     # Strip the file extension for creating subdirectories
-    file_name_no_ext: str = os.path.splitext(file_name)[0]
+    file_name_no_ext: str = Path(file_name).stem
 
     # Create a folder in encoded and decoded directories for each file
-    file_encoded_dir: str = os.path.join(encoded_dir, file_name_no_ext)
-    os.makedirs(file_encoded_dir, exist_ok=True)
-    file_decoded_dir: str = os.path.join(decoded_dir, file_name_no_ext)
-    os.makedirs(file_decoded_dir, exist_ok=True)
+    file_encoded_dir: str = str(Path(encoded_dir) / file_name_no_ext)
+    Path(file_encoded_dir).mkdir(parents=True, exist_ok=True)
+    file_decoded_dir: str = str(Path(decoded_dir) / file_name_no_ext)
+    Path(file_decoded_dir).mkdir(parents=True, exist_ok=True)
 
-    origin: str = os.path.join(original_dir, file_name)
+    origin: str = str(Path(original_dir) / file_name)
     # Convert bytes to bits
-    original_size: int = os.path.getsize(origin) * 8  
+    original_size: int = Path(origin).stat().st_size * 8
     print(f"File: {file_name} - Original Size: {original_size} bits")
 
     """Test Huffmans"""
@@ -116,7 +116,7 @@ def test_file(original_dir: str, encoded_dir: str, decoded_dir: str, file_name: 
 
     """ Test DNA mapping"""
     # Before testing DNA mapping, ensure that the Huffman encoded file exists
-    if not os.path.exists(huffman_encoded_path):
+    if not Path(huffman_encoded_path).exists():
         raise FileNotFoundError(f"Huffman encoded file {huffman_encoded_path} doesn't exist. Please run Huffman first.")
 
     test_encoding(origin, file_encoded_dir, file_decoded_dir, DNAMap(), original_size)
@@ -141,18 +141,18 @@ def test_directory(dir: str) -> None:
     """
 
     # See if directory exists in Testing/Original
-    original_dir: str = os.path.join("Testing", "Original", dir)
-    if not os.path.exists(original_dir):
+    original_dir: str = str(Path("Testing") / "Original" / dir)
+    if not Path(original_dir).exists():
         raise FileNotFoundError(f"Directory {original_dir} does not exist.")
 
     # Create a directory for the encoded and decoded files - if already exists, it will not raise an error
-    encoded_dir: str = os.path.join("Testing", "Encoded", dir)
-    os.makedirs(encoded_dir, exist_ok=True)
-    decoded_dir: str = os.path.join("Testing", "Decoded", dir)
-    os.makedirs(decoded_dir, exist_ok=True)
+    encoded_dir: str = str(Path("Testing") / "Encoded" / dir)
+    Path(encoded_dir).mkdir(parents=True, exist_ok=True)
+    decoded_dir: str = str(Path("Testing") / "Decoded" / dir)
+    Path(decoded_dir).mkdir(parents=True, exist_ok=True)
 
     # Get all file names in the original directory
-    file_names: list[str] = os.listdir(original_dir)
+    file_names: list[str] = [file_path.name for file_path in Path(original_dir).iterdir()]
 
     # Go through each file and test encoding and decoding for Huffman, Quaternary Huffman, and DNA mapping
     for file_name in file_names:
@@ -160,7 +160,7 @@ def test_directory(dir: str) -> None:
         if file_name.startswith('.'):
             continue
         # Skip directories, we only want to test files
-        if os.path.isdir(os.path.join(original_dir, file_name)):
+        if (Path(original_dir) / file_name).is_dir():
             continue
 
         test_file(original_dir, encoded_dir, decoded_dir, file_name)
@@ -191,14 +191,14 @@ def main() -> None:
         None
     """
     # Make the dir
-    results_dir: str = os.path.join("Testing", "Results")
-    os.makedirs(results_dir, exist_ok=True)
+    results_dir: str = str(Path("Testing") / "Results")
+    Path(results_dir).mkdir(parents=True, exist_ok=True)
 
     date_format: str = "%Y-%m-%d_%H:%M:%S"
 
     # Make file name timestampped
     start: str = datetime.now().strftime(date_format)
-    output_file: str = os.path.join(results_dir, f"Results-{start}.txt")
+    output_file: str = str(Path(results_dir) / f"Results-{start}.txt")
     with open(output_file, 'w', encoding='utf-8') as result_file:
         # Print both to console and to the file
         sys.stdout = Tee(sys.stdout, result_file)

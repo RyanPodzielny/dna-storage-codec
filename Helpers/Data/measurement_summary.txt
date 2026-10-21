@@ -1,0 +1,72 @@
+Method            | Parameter | Average  | Minimum  | Maximum 
+------------------+-----------+----------+----------+---------
+Huffman           |           | 2.393629 | 2.209627 | 2.543305
+Quaternary        |           | 2.431578 | 2.246229 | 2.576349
+Trenary           |           | 3.057085 | 2.827759 | 3.238813
+Goldman           |           | 3.057085 | 2.827759 | 3.238813
+DNAMap            |           | 3.969978 | 3.905133 | 4.000000
+DNAMapHuffman     |           | 2.393629 | 2.209627 | 2.543305
+Pgram             | 2         | 4.269406 | 3.988981 | 4.430016
+Pgram             | 3         | 3.617698 | 3.266058 | 3.905671
+Pgram             | 4         | 3.086508 | 2.663263 | 3.462602
+Pgram             | 5         | 2.700846 | 2.264714 | 3.129564
+Pgram             | 6         | 2.394985 | 2.020156 | 2.875680
+Pgram             | 7         | 2.153673 | 1.787960 | 2.636459
+Pgram             | 8         | 1.953643 | 1.621607 | 2.416631
+Pgram             | 9         | 1.775901 | 1.464123 | 2.207172
+Pgram             | 10        | 1.632083 | 1.333512 | 2.016030
+Pgram             | 11        | 1.508850 | 1.220640 | 1.846763
+Pgram             | 12        | 1.410659 | 1.177640 | 1.741577
+Pgram             | 13        | 1.317979 | 1.110185 | 1.646537
+Pgram             | 14        | 1.235689 | 1.037624 | 1.531844
+Pgram             | 15        | 1.160520 | 0.972588 | 1.431236
+Pgram             | 16        | 1.099063 | 0.916152 | 1.342497
+BitScanQuaternary | 4         | 3.567163 | 3.455229 | 3.671107
+BitScanQuaternary | 5         | 4.004722 | 3.916758 | 4.098099
+BitScanQuaternary | 6         | 3.750741 | 3.621681 | 3.876272
+BitScanQuaternary | 7         | 3.836440 | 3.746197 | 3.912420
+BitScanQuaternary | 8         | 2.431578 | 2.246229 | 2.576349
+BitScanQuaternary | 9         | 3.612771 | 3.507991 | 3.709196
+BitScanQuaternary | 10        | 3.225629 | 3.102083 | 3.344434
+BitScanQuaternary | 11        | 3.349670 | 3.205859 | 3.459627
+BitScanQuaternary | 12        | 2.627163 | 2.493953 | 2.727216
+BitScanQuaternary | 13        | 3.094064 | 2.890352 | 3.200497
+BitScanQuaternary | 14        | 2.733810 | 2.547971 | 2.837369
+BitScanQuaternary | 15        | 2.850526 | 2.604407 | 2.993290
+BitScanQuaternary | 16        | 2.004110 | 1.854609 | 2.081955
+BitScanQuaternary | 17        | 2.622650 | 2.324644 | 2.800949
+BitScanQuaternary | 18        | 2.350104 | 2.105886 | 2.512067
+BitScanQuaternary | 19        | 2.421690 | 2.103736 | 2.624386
+BitScanQuaternary | 20        | 2.018863 | 1.785004 | 2.175756
+BitScanQuaternary | 21        | 2.244377 | 1.902446 | 2.469549
+BitScanQuaternary | 22        | 2.039867 | 1.735286 | 2.247478
+BitScanQuaternary | 23        | 2.086006 | 1.719162 | 2.341068
+BitScanQuaternary | 24        | 1.630732 | 1.403117 | 1.797913
+BitScanQuaternary | 25        | 1.945286 | 1.576458 | 2.218571
+BitScanQuaternary | 26        | 1.792387 | 1.459823 | 2.037947
+BitScanQuaternary | 27        | 1.818411 | 1.449879 | 2.106738
+BitScanQuaternary | 28        | 1.593871 | 1.306638 | 1.819838
+BitScanQuaternary | 29        | 1.709623 | 1.343994 | 2.011761
+BitScanQuaternary | 30        | 1.593133 | 1.265251 | 1.873791
+BitScanQuaternary | 31        | 1.610384 | 1.251545 | 1.922581
+BitScanQuaternary | 32        | 1.343621 | 1.085998 | 1.570113
+BitScanQuaternary | 33        | 1.519097 | 1.167966 | 1.834523
+BitScanQuaternary | 34        | 1.427907 | 1.104273 | 1.725518
+BitScanQuaternary | 35        | 1.437718 | 1.097286 | 1.750007
+BitScanQuaternary | 36        | 1.302813 | 1.017200 | 1.578196
+BitScanQuaternary | 37        | 1.362558 | 1.028218 | 1.671322
+BitScanQuaternary | 38        | 1.292578 | 0.990863 | 1.587593
+BitScanQuaternary | 39        | 1.296945 | 0.980919 | 1.597481
+BitScanQuaternary | 40        | 1.131600 | 0.881752 | 1.393640
+BitScanQuaternary | 41        | 1.233661 | 0.932008 | 1.525712
+BitScanQuaternary | 42        | 1.176603 | 0.898414 | 1.459844
+BitScanQuaternary | 43        | 1.177415 | 0.889008 | 1.458528
+BitScanQuaternary | 44        | 1.092090 | 0.839559 | 1.361860
+BitScanQuaternary | 45        | 1.122615 | 0.842784 | 1.396255
+BitScanQuaternary | 46        | 1.077626 | 0.815372 | 1.345957
+BitScanQuaternary | 47        | 1.074611 | 0.805966 | 1.336570
+BitScanQuaternary | 48        | 0.971085 | 0.748186 | 1.226237
+BitScanQuaternary | 49        | 1.028287 | 0.772373 | 1.280855
+BitScanQuaternary | 50        | 0.990590 | 0.747648 | 1.240835
+BitScanQuaternary | 51        | 0.986789 | 0.736899 | 1.228921
+BitScanQuaternary | 52        | 0.930056 | 0.704381 | 1.176240

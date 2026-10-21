@@ -36,7 +36,7 @@ class CheckSum:
 
         # Bit shift left to get 2^required_width, which is number of unique values we can have
         self.indexer: Indexer = indexer(
-            width=indexer.determine_optimal_width(1 <<self.width),
+            width=indexer.determine_optimal_width(1 << self.width),
             max_run_length=max_run_length
         )
 

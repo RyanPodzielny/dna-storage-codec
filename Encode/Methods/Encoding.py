@@ -13,8 +13,6 @@ import json
 
 
 class Encoding:
-    # Constants
-
     # After encoding, use the binary string to map to DNA bases with its reverse
     DNA_BASES: Final[set[str]] = {'A', 'C', 'G', 'T'}
     DNA_MAP: Final[dict[str, str]] = {
@@ -24,6 +22,8 @@ class Encoding:
         '11': 'T'
     }
     REVERSE_DNA_MAP: Final[dict[str, str]] = {v: k for k, v in DNA_MAP.items()}
+
+    BINARY_SYMBOLS: Final[set[str]] = {'0', '1'}
 
     # JSON keys for saving and reading encoded data
     ENCODED_DATA: Final[str] = "encoded_data"
@@ -120,12 +120,12 @@ class Encoding:
     
 
     @abstractmethod
-    def encode_segments(self, data: str, payload_length: int, *args, **kwargs) -> list[str]:
+    def encode_segments(self, data: str, payload_length: int, *args, **kwargs) -> tuple[dict[str, str], list[str], Any]:
         raise NotImplementedError("Subclasses must implement this method.")
     
 
     @abstractmethod
-    def encode(self, data: str) -> str:
+    def encode(self, data: str) -> tuple[dict[str, str], str]:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
@@ -146,6 +146,11 @@ class Encoding:
 
     @abstractmethod
     def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
+        raise NotImplementedError("Subclasses must implement this method.")
+
+
+    @abstractmethod
+    def estimate_bases_per_byte(self) -> float:
         raise NotImplementedError("Subclasses must implement this method.")
 
 

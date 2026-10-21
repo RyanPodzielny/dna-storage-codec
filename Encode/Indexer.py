@@ -19,7 +19,11 @@ class Indexer:
             width: The width of the index sequence.
             Args and kwargs are included for polymorphism, but unused
         """
+        # Width can be set to -1 if we set it at a later date, but it cannot be negative when used for ranking 
         self.width: int = width
+
+        # Default value, can be overridden in subclasses
+        self.max_run_length: int = 1  
 
 
     @abstractmethod
@@ -53,6 +57,9 @@ class DNAMapIndexer(Indexer):
         """
         super().__init__(width)
 
+        # The DNAMapIndexer does not have a maximum run length constraint
+        self.max_run_length = -1
+
 
     @override
     def calculate_total_valid_indices(self) -> int:
@@ -67,9 +74,13 @@ class DNAMapIndexer(Indexer):
 
     @override
     @staticmethod
-    def determine_optimal_width(required_capacity: int) -> int:
+    def determine_optimal_width(required_capacity: int, *args, **kwargs) -> int:
         """
         Determines the minimum width of the index sequence required to uniquely identify a given number of oligos.
+
+        Parameters:
+            required_capacity: The number of oligos to index (or just just numbers to support in general).
+            args and kwargs are included for polymorphism, but unused
 
         Returns:
             The optimal width of the index sequence.
@@ -135,6 +146,10 @@ class DNAMapIndexer(Indexer):
         Raises:
             ValueError: If the index is negative or exceeds the maximum value for the given width.
         """
+        if self.width <= 0:
+            raise ValueError("Width must be a positive integer.")
+
+
         # Convert the decimal index to a binary string with correct leading zeros (need x2 as each base is 2 bits)
         binary_string: str = f"{index:0{self.width * 2}b}"
         if len(binary_string) > self.width * 2:
@@ -158,6 +173,8 @@ class GoldmanIndexer(Indexer):
             width: The width of the index sequence. If None, it will be determined based on the number of oligos.
         """
         super().__init__(width)
+        # Goldman indexing does not allow homopolymer runs longer than 1
+        self.max_run_length: int = 1  
 
 
     def _decimal_to_trit(self, index: int) -> str:
@@ -169,7 +186,13 @@ class GoldmanIndexer(Indexer):
 
         Returns:
             The trit representation of the decimal index.
+
+        Raises:
+            ValueError: If the index is negative.
         """
+        if index < 0:
+            raise ValueError("Index must be a non-negative integer.")
+
         trit: str = ""
         while index > 0:
             trit = str(index % 3) + trit
@@ -206,6 +229,9 @@ class GoldmanIndexer(Indexer):
         Returns:
             The total number of valid index sequences.
         """
+        if self.width <= 0:
+            raise ValueError("Width must be a positive integer.")
+
         # For Goldman indexing, the total number of valid indices is simply 3^width, since each position in the index
         #   sequence can be one of three bases (A, C, G) and we are not considering homopolymer runs in this calculation.
         total_valid_indices: int = 3 ** self.width
@@ -214,9 +240,13 @@ class GoldmanIndexer(Indexer):
 
     @override
     @staticmethod
-    def determine_optimal_width(required_capacity: int) -> int:
+    def determine_optimal_width(required_capacity: int, *args, **kwargs) -> int:
         """
         Determines the minimum width of the index sequence required to uniquely identify a given number of oligos.
+
+        Parameters:
+            required_capacity: The number of oligos to index (or just just numbers to support in general).
+            args and kwargs are included for polymorphism, but unused
 
         Returns:
             The optimal width of the index sequence.
@@ -494,6 +524,8 @@ class EnumerativeIndexer(Indexer):
             ValueError: If the index sequence length does not match the expected width, or if the
                 before or after sequences are empty, or if the before or after exceeds the maximum run length.
         """
+        if self.width <= 0:
+            raise ValueError("Width must be a positive integer.")
 
         if len(index_sequence) != self.width:
             raise ValueError(f"Index sequence length {len(index_sequence)} does not match expected width {self.width}.")
@@ -570,9 +602,11 @@ class EnumerativeIndexer(Indexer):
             The index sequence corresponding to the given rank.
 
         Raises:
-            ValueError: If the index is negative, or if the before or after sequences are empty
+            ValueError: If the index or width is negative, or if the before or after sequences are empty
         """
-
+        if self.width <= 0:
+            raise ValueError("Width must be a positive integer.")
+    
         if index < 0:
             raise ValueError("Rank cannot be negative.")
 

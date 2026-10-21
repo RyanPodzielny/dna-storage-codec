@@ -9,6 +9,7 @@ be stored differently in a real application.
 """
 
 
+import math
 from typing import Final, override
 from Encode.Methods.Encoding import Encoding
 from Encode.Helpers.PriorityQueue import PriorityQueue
@@ -140,6 +141,9 @@ class Huffman(Encoding):
             merged_node = (merged_frequency, tuple(children))
 
             self.priority_queue.enqueue(merged_node)
+
+            # After the first merge, we always take 'arity' nodes for subsequent merges
+            take = self.CHILDREN  
 
 
     def _generate_codes(self) -> dict[str, str]:
@@ -389,6 +393,18 @@ class Huffman(Encoding):
             f.write(decoded_data)
 
         return decoded_data
+
+
+    def estimate_bases_per_byte(self) -> float:
+        """
+        Estimates the number of DNA bases required to encode one byte of data using Huffman coding. Calculated based on
+        the maximum from the average_bases_per_byte script.
+
+
+        Returns:
+            The estimated number of DNA bases per byte as a float.
+        """
+        return 2.6
     
 
     @override
@@ -501,6 +517,19 @@ class Trenary(Huffman):
         return codes
 
 
+    @override
+    def estimate_bases_per_byte(self) -> float:
+        """
+        Estimates the number of DNA bases required to encode one byte of data using ternary Huffman coding. Calculated 
+        based on the maximum from the average_bases_per_byte script.
+
+
+        Returns:
+            The estimated number of DNA bases per byte as a float.
+        """
+        return 3.3
+
+
 class Quaternary(Huffman):
     def __init__(self) -> None:
         """
@@ -523,7 +552,31 @@ class Quaternary(Huffman):
         """
 
 
+    @override
+    def estimate_bases_per_byte(self) -> float:
+        """
+        Estimates the number of DNA bases required to encode one byte of data using quaternary Huffman coding. 
+        Calculated based on the maximum from the average_bases_per_byte script.
+
+        Returns:
+            The estimated number of DNA bases per byte as a float.
+        """
+        return 2.6
+
+
 class BitScanQuaternary(Quaternary):
+    # Measured bases per byte by bit-scan length maximum, rounded up I know constants aren't great, but easiest way
+    #   to get a good estimate of the average bases per byte for each bit-scan length. 
+    BITSCAN_BASES_PER_BYTE: Final[dict[int, float]] = {
+        4: 3.7, 5: 4.1, 6: 3.9, 7: 4.0, 8: 2.6, 9: 3.8, 10: 3.4, 11: 3.5,
+        12: 2.8, 13: 3.3, 14: 2.9, 15: 3.0, 16: 2.1, 17: 2.9, 18: 2.6, 19: 2.7,
+        20: 2.2, 21: 2.5, 22: 2.3, 23: 2.4, 24: 1.8, 25: 2.3, 26: 2.1, 27: 2.2,
+        28: 1.9, 29: 2.1, 30: 1.9, 31: 2.0, 32: 1.6, 33: 1.9, 34: 1.8, 35: 1.8,
+        36: 1.6, 37: 1.7, 38: 1.6, 39: 1.6, 40: 1.4, 41: 1.6, 42: 1.5, 43: 1.5,
+        44: 1.4, 45: 1.4, 46: 1.4, 47: 1.4, 48: 1.3, 49: 1.3, 50: 1.3, 51: 1.3,
+        52: 1.2
+    }
+
     def __init__(self, k: int = 4) -> None:
         """
         Initializes a new instance of the OptimizedQuaternary class.
@@ -637,12 +690,35 @@ class BitScanQuaternary(Quaternary):
         return optimal_k, max_density, best_huffman_codes, best_encoded_data
 
 
+    @override
+    def estimate_bases_per_byte(self) -> float:
+        """
+        Estimated bases per byte for this scanner's K (self.K).
+
+        The rate is not smooth in K: values that are multiples of 8 align with character boundaries and do much better 
+        (K=8 is ~2.4 but K=7 and K=9 are ~3.9 and ~3.6). So this uses a measured table where K is covered, and otherwise
+        a guaranteed upper bound: a quaternary Huffman code over K-bit symbols averages at most ceil(K / 2) bases per 
+        symbol, with 8 / K symbols per byte. The bound can overshoot by 1.2-1.7x.
+
+        For large K the real rate also depends on file size (more distinct K-bit symbols as the file grows).
+        """
+        if self.K in BitScanQuaternary.BITSCAN_BASES_PER_BYTE:
+            return BitScanQuaternary.BITSCAN_BASES_PER_BYTE[self.K]
+        return (8 / self.K) * math.ceil(self.K / 2)
+
+
     def print_info(self, encoded_data: str, original_size: int, k: int = 3) -> None:
         super().print_info(encoded_data, original_size, k)
         print(f"\tK Used: {self.K}")
 
 
 class Pgram(Huffman):
+    # Maximum (rounded up) measured bases per byte by max p-gram length
+    PGRAM_BASES_PER_BYTE: Final[dict[int, float]] = {
+        2: 4.5, 3: 4.0, 4: 3.5, 5: 3.2, 6: 2.9, 7: 2.7, 8: 2.5, 9: 2.3,
+        10: 2.1, 11: 1.9, 12: 1.8, 13: 1.7, 14: 1.6, 15: 1.5, 16: 1.4,
+    }
+
     def __init__(self, m: int = 3) -> None:
         """
         Initializes a new instance of the Pgram class.
@@ -660,7 +736,7 @@ class Pgram(Huffman):
 
         self.COMPLEMENT: dict[str, str] = {'A': 'G', 'C': 'T',
                                            'G': 'A', 'T': 'C'}
-
+        
 
     @override
     def _add_padding(self, segment: str, payload_length: int, huffman_codes: dict[str, str]) -> str:
@@ -915,7 +991,18 @@ class Pgram(Huffman):
                         data: str, 
                         payload_length: int, 
                         *,
-                        previous_bases: list[str]) -> tuple[dict[str, str], list[str]]:
+                        previous_sequences: list[str]) -> tuple[dict[str, str], list[str]]:
+        """
+        Encodes the given data into segments using the Huffman coding method.
+
+        Args:
+            data: The input data to be encoded.
+            payload_length: The length of each payload segment.
+            previous_sequences: A list of previous sequences (like the index or primer) for the mapping.
+
+        Returns:
+            A tuple containing the Huffman codes and the list of encoded segments.
+        """
 
         # Build our trees and get our codes
         self._build_tree(data, add_padding=True)
@@ -936,7 +1023,7 @@ class Pgram(Huffman):
                 huffman_codes, 
                 payload_length, 
                 True,
-                previous_bases[bases_index]
+                previous_sequences[bases_index][-1]
             )
             segments.append(encoded_message)
             bases_index += 1
@@ -1030,6 +1117,25 @@ class Pgram(Huffman):
         return decoded_data
 
 
+    @override
+    def estimate_bases_per_byte(self) -> float:
+        """
+        Estimated bases per byte for this Pgram's max p-gram length (self.M).
+
+        The rate drops as m grows, since longer p-grams get shorter codes per character. For m above the measured range 
+        this returns the m=6 value, which is conservative because the rate keeps falling.
+
+        Returns:
+            The estimated number of DNA bases per byte as a float.
+
+        Raises:
+            ValueError: If self.M is less than 1.
+        """
+        if self.M < 1:
+            raise ValueError("Pgram m must be at least 1.")
+        return Pgram.PGRAM_BASES_PER_BYTE[min(self.M, max(Pgram.PGRAM_BASES_PER_BYTE))]
+
+
     def print_info(self, encoded_data: str, original_size: int, k: int = 2) -> None:
         super().print_info(encoded_data, original_size, k)
         print(f"\tM Used: {self.M}")
@@ -1113,7 +1219,7 @@ class Goldman(Huffman):
                         data: str, 
                         payload_length: int,
                         *,
-                        previous_bases: list[str]) -> tuple[dict[str, str], list[str]]:
+                        previous_sequences: list[str]) -> tuple[dict[str, str], list[str]]:
         """
         Encodes the given data with Goldman's rotating tree approach using the generated Huffman codes and a specified
         starting base into segments of a specified payload length.
@@ -1121,7 +1227,7 @@ class Goldman(Huffman):
         Args:
             data: The string to be encoded.
             payload_length: The length of each segment in the encoded data.
-            previous_bases: A list of previous bases (like the index or primer) for the mapping.
+            previous_sequences: A list of previous sequences (like the index or primer) for the mapping.
 
         Returns:
             A tuple containing the Huffman codes and the encoded data.
@@ -1144,7 +1250,7 @@ class Goldman(Huffman):
                 trit_segment: str = trit_encoded_data[index:index + payload_length]
 
             # Index needs to be put back to normal for previous base list
-            previous_base: str = previous_bases[index // payload_length]
+            previous_base: str = previous_sequences[index // payload_length][-1]
 
             # If we need to add padding to the last segment, do it here
             trit_segment = self._add_padding(trit_segment, payload_length, huffman_codes)
@@ -1217,7 +1323,7 @@ class Goldman(Huffman):
                         huffman_codes: dict[str, str],
                         *,
                         payload_length: int, 
-                        previous_bases: list[str]) -> list[str]:
+                        previous_sequences: list[str]) -> list[str]:
         """
         Decodes the encoded data with Goldman's rotating tree approach using the provided Huffman codes and a specified
         starting base.
@@ -1226,22 +1332,22 @@ class Goldman(Huffman):
             encoded_data: The encoded data to be decoded as a list of strings.
             huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
             payload_length: The length of each segment in the encoded data.
-            previous_bases: A list of previous bases (like the index or primer) for the mapping.
+            previous_sequences: A list of previous sequences (like the index or primer) for the mapping.
 
         Returns:
             A list of strings, where each string corresponds to a decoded segment.
 
         Raises:
-            ValueError: If the length of the encoded data does not match the length of the previous bases list.
+            ValueError: If the length of the encoded data does not match the length of the previous sequences list.
         """
-        if len(previous_bases) < (len(encoded_data) // payload_length):
-            raise ValueError("Not enough previous bases provided for the number of segments to encode.")
+        if len(previous_sequences) < (len(encoded_data) // payload_length):
+            raise ValueError("Not enough previous sequences provided for the number of segments to encode.")
 
         decoded_segments: list[str] = []
 
         # Append the trit segments to a list with being aware what starting base we are using for each segment
         for index, segment in enumerate(encoded_data):
-            previous_base: str = previous_bases[index]
+            previous_base: str = previous_sequences[index][-1]
             trit_segment: str = self.dna_to_trit(segment, start_base=previous_base)
 
             # Now decode each trit segment with the huffman codes, and append to the decoded segments list
@@ -1268,6 +1374,16 @@ class Goldman(Huffman):
         trit_data: str = self.dna_to_trit(encoded_data)
 
         return super().decode(trit_data, huffman_codes, reverse=reverse)
+
+    @override
+    def estimate_bases_per_byte(self) -> float:
+        """
+        Estimates the number of DNA bases required to encode one byte of data using Goldman's rotating tree approach.
+
+        Returns:
+            The estimated number of DNA bases per byte as a float.
+        """
+        return 3.2
 
 
     @override

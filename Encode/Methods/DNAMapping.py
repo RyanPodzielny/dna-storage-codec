@@ -60,7 +60,7 @@ class DNAMap(Encoding):
         if len(segment) < payload_length:
             # ConveTr padding character to binary and then to DNA, we only need the DNA part
             padding: str
-            padding, _ = self.encode(self.ascii_to_binary(DNAMap.CHUNKING_PADDING_CHAR))
+            _, padding, _ = self.encode(self.ascii_to_binary(DNAMap.CHUNKING_PADDING_CHAR))
 
             # Continously add the padding character until we reach the desired length
             while len(segment) < payload_length:
@@ -72,7 +72,10 @@ class DNAMap(Encoding):
 
 
     @override
-    def encode_segments(self, binary_string: str, payload_length: int, *args, **kwargs) -> list[str]:
+    def encode_segments(self,
+                        binary_string: str, 
+                        payload_length: int, 
+                        *args, **kwargs) -> tuple[dict[str, str], list[str]]:
         """
         Encodes a binary string into DNA segments of a specified payload length.
 
@@ -82,11 +85,12 @@ class DNAMap(Encoding):
             *args and **kwargs are used to keep polymorphism with other encoding methods
 
         Returns:
-            A list of DNA segments, each of the specified payload length.
+            A tuple containing the mapping used for encoding and a list of DNA segments, each of the specified payload length.
         """
-
+        mapping: dict[str, str]
         dna_string: str
-        dna_string, _ = self.encode(binary_string)
+
+        mapping, dna_string, _ = self.encode(binary_string)
 
         segments: list[str] = []
         # Split the DNA string into segments of the specified payload length
@@ -97,11 +101,11 @@ class DNAMap(Encoding):
         # Now add padding if necessary to the last segment to ensure it is of the correct length
         segments[-1] = self._add_padding(segments[-1], payload_length)
 
-        return segments
+        return mapping, segments
 
         
     @override
-    def encode(self, binary_string: str) -> tuple[str, bool]:
+    def encode(self, binary_string: str) -> tuple[dict[str, str], str, bool]:
         """
         Encodes a binary string into a DNA sequence.
 
@@ -112,7 +116,8 @@ class DNAMap(Encoding):
             binary_string: The binary string to be encoded.
         
         Returns:
-            A tuple containing a boolean indicating whether padding was added and the resulting DNA sequence.
+            A tuple containing a boolean indicating whether padding was added, the resulting DNA sequence and the 
+            mapping used for encoding.
         """
         # Remove any leading/trailing whitespace, causes problems
         binary_string = binary_string.strip()
@@ -131,7 +136,7 @@ class DNAMap(Encoding):
             pair: str = binary_string[index:index+2]
             dna_string += self.DNA_MAP[pair]
 
-        return dna_string, has_padding
+        return self.DNA_MAP, dna_string, has_padding
         
 
     @override
@@ -166,7 +171,7 @@ class DNAMap(Encoding):
         # Encode the binary string to DNA
         dna_string: str
         has_padding: bool
-        dna_string, has_padding = self.encode(binary_string)
+        _, dna_string, has_padding = self.encode(binary_string)
 
         self.save_json_table(json_outpath, dna_string, has_padding=has_padding)
 
@@ -264,6 +269,17 @@ class DNAMap(Encoding):
         return len(encoded_data.strip())
 
 
+    def estimate_bases_per_byte(self) -> float:
+        """
+        Estimates the number of DNA bases required to encode one byte of data. Directly maps to 4 bytes. Calculated 
+        based on the maximum from the average_bases_per_byte script.
+
+        Returns:
+            The estimated number of DNA bases per byte.
+        """
+        return 4.0
+    
+
     @override
     def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
         """
@@ -349,7 +365,7 @@ class DNAMapHuffman(DNAMap):
 
             # Now encode the binary segment to DNA
             dna_segment: str
-            dna_segment, _ = super().encode(segment)
+            _, dna_segment, _ = super().encode(segment)
 
             encoded_data[index] = dna_segment
 
@@ -377,7 +393,7 @@ class DNAMapHuffman(DNAMap):
         has_padding: bool
 
         huffman_codes, encoded_data = Huffman().encode(data)
-        dna_string, has_padding = super().encode(encoded_data)
+        _, dna_string, has_padding = super().encode(encoded_data)
 
         return huffman_codes, dna_string, has_padding
 
@@ -409,7 +425,7 @@ class DNAMapHuffman(DNAMap):
         if as_binary:
             binary_string = Encoding.ascii_to_binary(binary_string)
 
-        dna_string, has_padding = super().encode(binary_string)
+        _, dna_string, has_padding = super().encode(binary_string)
 
         self.save_json_table(out_path, dna_string, huffman_codes, has_padding)
 
@@ -495,6 +511,18 @@ class DNAMapHuffman(DNAMap):
             f.write(decoded_data)
 
         return decoded_data
+
+
+    @override
+    def estimate_bases_per_byte(self) -> float:
+        """
+        Estimates the number of DNA bases required to encode one byte of data. Calculated based on the maximum from the 
+        average_bases_per_byte script.
+
+        Returns:
+            The estimated number of DNA bases per byte.
+        """
+        return 2.6
 
 
     @override
