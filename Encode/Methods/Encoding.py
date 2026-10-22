@@ -11,6 +11,8 @@ from abc import abstractmethod
 from typing import Final, Any
 import json
 
+from Encode.Helpers.Errors import JSONError
+
 
 class Encoding:
     # After encoding, use the binary string to map to DNA bases with its reverse
@@ -42,6 +44,8 @@ class Encoding:
         self.KEY_MULTIPLIER: int = 8  
         # Each bit in the code
         self.VALUE_MULTIPLIER: int = 1  
+        # Each estimated base per byte 
+        self.ESTIMATED_BASES_PER_BYTE: float = 2.0
 
 
     @staticmethod
@@ -57,15 +61,18 @@ class Encoding:
 
         Raises:
             FileNotFoundError: If the input JSON file does not exist.
-            ValueError: If the JSON file is empty or does not contain the expected keys.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
         # Read the encoded data and padding information from the JSON file
-        with open(json_inpath, 'r', encoding='utf-8', errors='ignore') as json_file:
+        with open(json_inpath, 'r', encoding='utf-8') as json_file:
             json_data = json.load(json_file)
 
             if json_data.keys() != {Encoding.ENCODED_DATA, Encoding.HUFFMAN_CODES, Encoding.HAS_SINGLE_PADDING, 
                                     Encoding.ENCODED_TYPE, Encoding.INDEXER_TYPE}:
-                raise ValueError(f"JSON file {json_inpath} does not contain the expected keys.")
+                raise JSONError(
+                    message=f"JSON file does not contain the expected keys.",
+                    json_path=json_inpath
+                )
             return json_data
 
     
@@ -103,7 +110,7 @@ class Encoding:
                 raise ValueError("Huffman codes cannot be empty for non-DNAMap encodings")
 
         # Write the DNA string to the output file
-        with open(json_path, 'w', encoding='utf-8', errors='ignore') as encoded_file:
+        with open(json_path, 'w', encoding='utf-8') as encoded_file:
             save: dict[str, Any] = {
                 Encoding.ENCODED_DATA: encoded_data,
                 Encoding.HUFFMAN_CODES: huffman_codes,
@@ -243,6 +250,10 @@ class Encoding:
 
         Returns:
             None
+
+        Raises:
+            FileNotFoundError: If the input JSON file does not exist.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
         json_data: dict[str, Any] = Encoding.read_json_table(json_path)
         encoded_data: str = json_data[Encoding.ENCODED_DATA]

@@ -7,7 +7,9 @@ import math
 from abc import abstractmethod
 from functools import lru_cache
 from typing import Any, Final, override
-from Encode.Methods.HuffmanCoding import Goldman
+
+from Encode.Helpers.Errors import EncodingError, MaxRunLengthError, RankError, UnrankError
+from Encode.Methods.HuffmanCoding import Goldman, Huffman
 from Encode.Methods.Encoding import Encoding
 
 class Indexer:
@@ -84,7 +86,14 @@ class DNAMapIndexer(Indexer):
 
         Returns:
             The optimal width of the index sequence.
+
+        Raises:
+            ValueError: If the required capacity is not a positive integer.
         """
+        # Capture error if required_capacity is less than or equal to 0
+        if required_capacity <= 0:
+            raise ValueError("Required capacity must be a positive integer.")
+
         # Each 2 bits represents 1 base, so we need to calculate the number of bits required to represent the number of oligos
         bits_required: int = math.ceil(math.log2(required_capacity))
 
@@ -112,18 +121,31 @@ class DNAMapIndexer(Indexer):
             Args and kwargs are included for polymorphism, but unused
 
         Returns:
-            The rank of the index sequence.
+            The rank (index) of the index sequence.
 
         Raises:
-            ValueError: If the index sequence length does not match the expected width.
+            RankError: If the index sequence length does not match the expected width.
+            KeyError: If the index sequence contains invalid characters not in the DNA mapping.
         """
         if len(index_sequence) != self.width:
-            raise ValueError(f"Index sequence length {len(index_sequence)} does not match expected width {self.width}.")
+            raise RankError(
+                message="Could not rank index sequence",
+                index_sequence=index_sequence,
+                width=self.width
+            )
 
         # Convert the index sequence to a binary string
         binary_string: str = ""
         for base in index_sequence:
             binary_string += Encoding.REVERSE_DNA_MAP[base]
+
+
+        if binary_string == "" or not all(bit in Encoding.BINARY_SYMBOLS for bit in binary_string):
+            raise RankError(
+                message="Could not rank index sequence",
+                index_sequence=index_sequence,
+                width=self.width
+            )
 
         # Convert to decimal
         rank: int = int(binary_string, 2)
@@ -145,15 +167,19 @@ class DNAMapIndexer(Indexer):
 
         Raises:
             ValueError: If the index is negative or exceeds the maximum value for the given width.
+            UnrankError: If the generated index sequence length does not match the expected width.
         """
         if self.width <= 0:
             raise ValueError("Width must be a positive integer.")
 
-
         # Convert the decimal index to a binary string with correct leading zeros (need x2 as each base is 2 bits)
         binary_string: str = f"{index:0{self.width * 2}b}"
         if len(binary_string) > self.width * 2:
-            raise ValueError(f"Index {index} exceeds the maximum value for width {self.width}.")
+            raise UnrankError(
+                message="Could not unrank index sequence!",      
+                index=index, 
+                capacity=self.calculate_total_valid_indices()
+            )
 
         # Map the binary string to DNA bases using the DNAMap scheme
         unrank: str = ""
@@ -213,6 +239,9 @@ class GoldmanIndexer(Indexer):
 
         Returns:
             The decimal index corresponding to the trit representation.
+
+        Raises:
+            ValueError: If a digit in trit cannot be caust to an int.
         """
         decimal: int = 0
         for digit in trit:
@@ -228,6 +257,9 @@ class GoldmanIndexer(Indexer):
 
         Returns:
             The total number of valid index sequences.
+
+        Raises:
+            ValueError: If the width is not a positive integer.
         """
         if self.width <= 0:
             raise ValueError("Width must be a positive integer.")
@@ -250,7 +282,13 @@ class GoldmanIndexer(Indexer):
 
         Returns:
             The optimal width of the index sequence.
+
+        Raises:
+            ValueError: If the required capacity is not a positive integer.
         """
+        if required_capacity <= 0:
+            raise ValueError("Required capacity must be a positive integer.")
+
         # We can easily calculate the optimal width for the Goldman indexer by using the formula:
         #   width = ceil(log3(required_capacity))
         width: int = math.ceil(math.log(required_capacity, 3))
@@ -258,51 +296,84 @@ class GoldmanIndexer(Indexer):
 
 
     @override
-    def unrank(self, index: int, before: str, *args: Any, **kwargs: Any) -> str:
+    def unrank(self, index: int, before_sequence: str, *args: Any, **kwargs: Any) -> str:
         """
         Generates the index sequence corresponding to a given rank based on the Goldman indexing scheme.
 
         Args:
             index: The rank of the index sequence to generate.
-            before: The before sequence used in the oligo.
+            before_sequence: The before sequence used in the oligo.
             Args and kwargs are included for polymorphism, but unused
 
         Returns:
             The index sequence corresponding to the given rank.
+
+        Raises:
+            ValueError: If the index is negative or exceeds the maximum value for the given width.
+            UnrankError: If the generated index sequence length does not match the expected width.
         """
-        before_end: str = before[-1]
+        # Default to start base if before is not provided
+        before_end: str = Huffman.START_BASE  
+        if before_sequence:
+            before_end = before_sequence[-1] 
 
         # Convert decimal index to trit representation, then use Goldman mapping to convert to DNA
         trit_representation: str = self._decimal_to_trit(index)
-        unrank: str = Goldman().trit_to_dna(trit_representation, start_base=before_end)
-        return unrank
+
+        # Want to that this is actually an indexing unrank error rather than encoding (helps locate)
+        try:
+            unrank: str = Goldman().trit_to_dna(trit_representation, start_base=before_end)
+            return unrank
+        except EncodingError as _:
+            raise UnrankError(
+                message="Could not unrank index sequence",
+                index=index,
+                capacity=self.calculate_total_valid_indices()
+            )
 
 
     @override
-    def rank(self, index_sequence: str, before: str, *args: Any, **kwargs: Any) -> int:
+    def rank(self, index_sequence: str, *, before_sequence: str, args: Any, **kwargs: Any) -> int:
         """
         Calculates the rank of a given index sequence based on the Goldman indexing scheme.
 
         Args:
             index_sequence: The index sequence to calculate the rank for.
-            before: The before sequence used in the oligo.
+            before_sequence: The before sequence used in the oligo.
             _after: Unused, included for polymorphism.
 
         Returns:
             The rank of the index sequence.
+
+        Raises:
+            ValueError: If cannot convert trit to decimal.
+            RankError: If the index sequence cannot be ranked due to encoding issues.
         """
-        before_base: str = before[-1]
+        # Default to start base if before is not provided
+        before_end: str = Huffman.START_BASE  
+        if before_sequence:
+            before_end: str = before_sequence[-1] 
 
-        # Convert DNA bases to trits using Goldman mapping and back to decimal index
-        trit_representation: str = Goldman().dna_to_trit(index_sequence, start_base=before_base)
-        rank: int = self._trit_to_decimal(trit_representation)
+        # Need to know that it is actually an indexing rank error rather than encoding (helps locate)
+        try:
+            # Convert DNA bases to trits using Goldman mapping and back to decimal index
+            trit_representation: str = Goldman().dna_to_trit(index_sequence, start_base=before_end)
+            rank: int = self._trit_to_decimal(trit_representation)
 
-        return rank
+            return rank
+        except EncodingError as _:
+            raise RankError(
+                message="Could not rank index sequence",
+                index_sequence=index_sequence,
+                width=self.width
+            )
 
 
 class EnumerativeIndexer(Indexer):
     ORDERED_ALPHABET: Final[tuple[str, ...]] = ('A', 'C', 'G', 'T')
     VALID_NUM: Final[int] = len(ORDERED_ALPHABET)
+
+
     def __init__(self, width: int, max_run_length: int = 1):
         """
         Initializes the EnumerativeIndexer with the number of oligos, width of the index sequence, and maximum allowed 
@@ -329,57 +400,58 @@ class EnumerativeIndexer(Indexer):
 
         Returns:
             The homopolymer run length of the sequence.
-
-        Raises:
-            ValueError: If the sequence is empty.
         """
-        if not sequence:
-            raise ValueError("Sequence cannot be empty.")
-
-        run_length: int = 1
+        run_length: int = 0
 
         # Reversing the sequence takes a bunch of time espiecally if we have a lot of oligos, so we just iterate 
         #   backwards instead of reversing the string
 
         # Start from the end of the sequence if reverse is True
         if reverse:
-            for i in range(len(sequence) - 1, 0, -1):
-                if sequence[i] == sequence[i - 1]:
+            for index in range(len(sequence) - 1, 0, -1):
+                if sequence[index] == sequence[index - 1]:
                     run_length += 1
                 else:
                     break
         # Start from the beginning of the sequence if reverse is False
         else:
-            for i in range(1, len(sequence)):
-                if sequence[i] == sequence[i - 1]:
+            for index in range(1, len(sequence)):
+                if sequence[index] == sequence[index - 1]:
                     run_length += 1
                 else:
                     break
 
         return run_length
 
-    def _sequence_gaurd(self, before: str, after: str) -> tuple[int, int]:
+    def _sequence_gaurd(self, before: str, after: str, ignore_run_length: bool = False) -> tuple[int, int]:
         """
         Validates the before and after sequences to ensure they are not empty and do not exceed the maximum run length.
 
         Args:
             before: The before sequence used in the oligo.
             after: The after sequence used in the oligo.
+            ignore_run_length: A boolean indicating whether to ignore the maximum run length check.
+
+        Returns:
+            A tuple containing the homopolymer run lengths of the before and after sequences.
 
         Raises:
-            ValueError: If the before or after sequences are empty, or if they exceed the maximum
-            run length.
+            ExeceedsMaxRunLengthError: If the before or after sequences are above the maximum run length
         """
-        if not before or not after:
-            raise ValueError("Before and after sequences cannot be empty.")
+        if ignore_run_length:
+            return 0, 0
 
         before_run: int = self._run_length(before, reverse=True)
         after_run: int = self._run_length(after, reverse=False)
 
         # Check if the before or after exceeds the maximum run length, which would make it impossible to generate 
         #   valid index sequences with the max run length constraint.
-        if before_run > self.max_run_length or after_run > self.max_run_length:
-            raise ValueError("Before or after sequences exceed the maximum run length.")
+        if not ignore_run_length and (before_run > self.max_run_length or after_run > self.max_run_length):
+            raise MaxRunLengthError(
+                message="Before or after sequences exceed the maximum run length",
+                sequence=f"{before} {after}",
+                max_run_length=self.max_run_length
+            )
 
         return before_run, after_run
 
@@ -488,7 +560,13 @@ class EnumerativeIndexer(Indexer):
 
         Returns:
             The optimal width of the index sequence.
+
+        Raises:
+            ValueError: If the required capacity is not a positive integer.
+            RuntimeError: If the optimal width cannot be determined within reasonable bounds (width > 50).
         """
+        if required_capacity <= 0:
+            raise ValueError("Required capacity must be a positive integer.")
 
         # Start with a width of 1 and increment until we find a width that can accommodate the number of oligos
         width: int = 1
@@ -504,10 +582,11 @@ class EnumerativeIndexer(Indexer):
 
             # Prevent infinite loop
             if width > 50:  
-                raise ValueError("Unable to determine optimal width within reasonable bounds.")
+                raise RuntimeError("Unable to determine optimal width within reasonable bounds.")
 
 
-    def rank(self, index_sequence: str, *, before: str, after: str) -> int:
+
+    def rank(self, index_sequence: str, *, before: str, after: str, ignore_run_length: bool = False) -> int:
         """
         Calculates the rank of a given index sequence based on the enumerative indexing scheme. Basically gives the
         index based on the sequence.
@@ -521,21 +600,27 @@ class EnumerativeIndexer(Indexer):
             The rank of the index sequence.
 
         Raises:
-            ValueError: If the index sequence length does not match the expected width, or if the
-                before or after sequences are empty, or if the before or after exceeds the maximum run length.
+            ValueError: If width is not a positive integer or if the before/after sequence exceeds maximum run length.
+            RankError: If the index sequence length does not match the expected width.
         """
         if self.width <= 0:
             raise ValueError("Width must be a positive integer.")
 
         if len(index_sequence) != self.width:
-            raise ValueError(f"Index sequence length {len(index_sequence)} does not match expected width {self.width}.")
+            raise RankError(
+                message="Could not rank index sequence",      
+                index_sequence=index_sequence, 
+                width=self.width
+            )
 
         before_run: int 
         after_run: int
-        before_run, after_run = self._sequence_gaurd(before, after)
-        previous_base: str = before[-1]
-        ending_base: str = after[0]
+        before_run, after_run = self._sequence_gaurd(before, after, ignore_run_length=ignore_run_length)
 
+        # Ensure we always have a previous start or end base (if no primers this can happen)
+        previous_base: str = before[-1] if before else Huffman.START_BASE
+        ending_base: str = after[0] if after else Huffman.START_BASE
+    
         index_run: int = before_run
         new_run: int = 0
 
@@ -578,18 +663,26 @@ class EnumerativeIndexer(Indexer):
                     found = True
                     break
 
-            # Means the actual base was not found in the ordered alphabet, which should never happen
+            # Means the actual base was not found in the ordered alphabet, which should never happen unless error
             if not found:
-                raise ValueError(f"Invalid index sequence '{index_sequence}'.")
+                raise RankError(
+                    message="Could not rank index sequence",
+                    index_sequence=index_sequence,
+                    width=self.width
+                )
 
         # Check the boundary between index and after.
-        if (previous_base == ending_base) and (index_run + after_run > self.max_run_length):
-            raise ValueError("Index sequence and after exceed the maximum run length.")
+        if not ignore_run_length and index_run + after_run > self.max_run_length:
+            raise MaxRunLengthError(
+                message="Index sequence and after exceed the maximum run length.",
+                sequence=index_sequence,
+                max_run_length=self.max_run_length
+            )
 
         return rank
         
 
-    def unrank(self, index: int, *, before: str, after: str) -> str:
+    def unrank(self, index: int, *, before: str, after: str, ignore_run_length: bool = False) -> str:
         """
         Generates the index sequence corresponding to a given rank based on the enumerative indexing scheme.
 
@@ -608,11 +701,11 @@ class EnumerativeIndexer(Indexer):
             raise ValueError("Width must be a positive integer.")
     
         if index < 0:
-            raise ValueError("Rank cannot be negative.")
+            raise ValueError("Index must be a non-negative integer.")
 
         before_run: int
         after_run: int 
-        before_run, after_run = self._sequence_gaurd(before, after)
+        before_run, after_run = self._sequence_gaurd(before, after, ignore_run_length=ignore_run_length)
         previous_base: str = before[-1]
         ending_base: str = after[0]
 
@@ -627,7 +720,11 @@ class EnumerativeIndexer(Indexer):
             after_run,
         )
         if index >= total:
-            raise ValueError(f"Rank {index} exceeds the total number of valid indices {total}.")
+            raise UnrankError(
+                message="Index is not in bounds of capacity",
+                index=index,
+                capacity=total
+            )
 
         index_sequence: str = ""
         # Go through each position in the index sequence and determine which base corresponds to the current rank

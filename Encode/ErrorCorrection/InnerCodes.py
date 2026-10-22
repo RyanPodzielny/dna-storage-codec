@@ -3,6 +3,7 @@ from fastcrc import crc16, crc32
 from typing import Callable
 from Encode.Indexer import Indexer
 from Encode.Methods.Encoding import Encoding
+from Encode.Helpers.Errors import InnerCodeError, RankError
 
 
 class CheckSum:
@@ -32,7 +33,6 @@ class CheckSum:
         else:
             self.crc_func = crc32.iso_hdlc
             self.width = 32
-
 
         # Bit shift left to get 2^required_width, which is number of unique values we can have
         self.indexer: Indexer = indexer(
@@ -72,7 +72,13 @@ class CheckSum:
 
         Returns:
             int: The calculated checksum.
+
+        Raises:
+            ValueError: If the data is empty or None.
         """
+        if not data:
+            raise ValueError("Data for checksum calculation cannot be empty or None.")
+
         # Convert data into bytes
         byte_stream: bytes = bytes(data, 'utf-8')
 
@@ -88,10 +94,16 @@ class CheckSum:
 
         Returns:
             list[int]: A new list of integers with checksums appended.
+
+        Raises:
+            ValueError: If the unencoded_data list is empty or None.
         """
         checksums: list[int] = []
 
         for item in unencoded_data:
+            if not item:
+                raise ValueError("Data for checksum calculation cannot be empty or None.")
+
             checksum: int = self.calculate_checksum(item)
             checksums.append(checksum)
 
@@ -108,7 +120,12 @@ class CheckSum:
 
         Returns:
             bool: True if the checksum is valid, False otherwise.
+
+        Raises:
+            ValueError: If the data is empty or None.
         """
+        if not data:
+            raise ValueError("Data for checksum verification cannot be empty or None.")
 
         # Calculate the checksum for the original data
         calculated_checksum: int = self.calculate_checksum(data)
@@ -130,6 +147,9 @@ class CheckSum:
 
         Returns:
             str: The corresponding DNA sequence.
+        
+        Raises:
+            UnrankError: If unable to unrank the checksum integer to a DNA sequence.
         """
         # Convert the checksum integer to a DNA sequence using the indexer
         dna_sequence: str = self.indexer.unrank(checksum, 
@@ -137,7 +157,6 @@ class CheckSum:
                                                 after=after_sequence)
 
         return dna_sequence
-
 
 
     def decode_from_dna(self, dna_sequence: str, before_sequence: str, after_sequence: str) -> int:
@@ -152,11 +171,15 @@ class CheckSum:
 
         Returns:
             int: The corresponding checksum integer.
+
+        Raises:
+            RankError: If unable to rank the DNA sequence back to a checksum integer.
         """
         # Convert the DNA sequence back to the checksum integer using the indexer
         checksum: int = self.indexer.rank(dna_sequence, 
                                           before=before_sequence, 
-                                          after=after_sequence)
+                                          after=after_sequence,
+                                          ignore_run_length=True)
 
         return checksum
 
@@ -174,6 +197,11 @@ class ReedSolomon:
 
         Args:
             parity_bytes: The number of Reed-Solomon parity bytes to append.
+            indexer: The type of indexer to use for the conversion.
+            max_run_length: The maximum allowed run length in the DNA sequence.
+
+        Raises:
+            ValueError: If parity_bytes is not between 2 and 16.
         """
         # Need a hard cap on the capacity. We need to represent them in a fixed width scheme for our dna, and we are 
         #   using a byte representation combination to achieve this. Becomes computationally expensive and impractical.
@@ -196,7 +224,7 @@ class ReedSolomon:
         Converts a DNA sequence to bytes with virtual padding.
 
         Args:
-            data: The DNA sequence to be converted.
+            encoded_data: The DNA sequence to be converted.
 
         Returns:
             bytes: The corresponding byte representation.
@@ -224,7 +252,13 @@ class ReedSolomon:
         byte_stream: bytearray = bytearray()
         for index in range(0, len(bit_stream), 8):
             byte: str = bit_stream[index:index+8]
-            byte_stream += bytes([int(byte, 2)])
+            try:
+                byte_stream += bytes([int(byte, 2)])
+            except ValueError as _:
+                raise InnerCodeError(
+                    message="Invalid DNA sequence for byte conversion", 
+                    sequence=bit_stream[index:index+8]
+                )
 
         return byte_stream
 
@@ -256,7 +290,10 @@ class ReedSolomon:
             after_sequence: The sequence after the parity bytes in the oligo.
     
         Returns:
-            The corresponding DNA sequence to the .
+            The corresponding DNA sequence to the Reed-Solomon parity bytes.
+        
+        Raises:
+            UnrankError: If unable to unrank the Reed-Solomon parity bytes integer to a DNA sequence.
         """
         parity_bytes: list[int] = self._encode(encoded_data)
         dna_sequence: str = ""
@@ -286,6 +323,7 @@ class ReedSolomon:
 
         Raises:
             ReedSolomonError: If the data cannot be corrected.
+            KeyError: If the bits are not in the DNA_MAP, which should not happen if the data is valid.
         """
         byte_stream: bytearray = self._to_bytes(encoded_data)
         stream_length: int = len(byte_stream)
@@ -297,7 +335,7 @@ class ReedSolomon:
         byte_stream += parity_bytes
 
         # Get only the decoded bytes, discard everything else
-        decoded_bytes: bytearray = bytearray(self.RSCodec.decode(byte_stream, erase_pos=erase_positions)[0])
+        decoded_bytes: bytearray = bytearray(self.RSCodec.decode(byte_stream, erase_pos=erase_positions)[1])
 
         # Convert the decoded bytes back to a DNA sequence
         bit_stream: str = "".join(f"{byte:08b}" for byte in decoded_bytes)
@@ -328,6 +366,11 @@ class ReedSolomon:
 
         Returns:
             The corresponding Reed-Solomon parity bytes integer.
+
+        Raises:
+            RankError: If unable to rank the DNA sequence back to a Reed-Solomon parity bytes integer.
+            ReedSolomonError: If the data cannot be corrected.
+            KeyError: If the bits are not in the DNA_MAP, which should not happen if the data is valid.
         """
         parity_bytes: bytearray = bytearray()
 
@@ -341,21 +384,21 @@ class ReedSolomon:
             end: int = start + self.indexer.width
             current_sequence: str = parity_dna_sequence[start:end]
 
-            parity_byte: int = 0
             try:
                 parity_byte: int = self.indexer.rank(current_sequence, 
-                                                    before=before_sequence, 
-                                                    after=after_sequence)
-
+                                                     before=before_sequence, 
+                                                     after=after_sequence,
+                                                     ignore_run_length=True)
                 # Can't decode, treat as an erasure
                 if not (0 <= parity_byte < 256):
-                    raise ValueError(f"Decoded parity byte {parity_byte} is out of valid range.")
-
-            # TODO: Make this more robust with our own errors
-            except ValueError as _:
-                parity_byte = 0
+                    parity_byte = 0
+                    erasures.append(index)
+            # If we cannot unrank, treat as ersasure - we will just use a 0 for the parity byte, but mark it as an erasure for the RS decoder
+            except RankError as _:
+                parity_byte: int = 0
                 erasures.append(index)
 
+        
             # Update new start sequence for the next parity byte to be decoded
             before_sequence = current_sequence
 

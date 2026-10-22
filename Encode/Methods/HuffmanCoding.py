@@ -11,6 +11,7 @@ be stored differently in a real application.
 
 import math
 from typing import Final, override
+from Encode.Helpers.Errors import EncodingError, IndexingError, PayloadLengthError
 from Encode.Methods.Encoding import Encoding
 from Encode.Helpers.PriorityQueue import PriorityQueue
 
@@ -47,6 +48,8 @@ class Huffman(Encoding):
 
         self.ORDER = Huffman.BINARY_ORDER
 
+        self.ESTIMATED_BASES_PER_BYTE: float = 2.6
+
 
     def _count_frequencies(self, data: str, k: int = 1) -> dict[str, int]:
         """
@@ -61,8 +64,8 @@ class Huffman(Encoding):
         """
         # Count the frequency of each character in the input data
         frequencies: dict[str, int] = {}
-        for i in range(0, len(data) - k + 1, k):
-            substring: str = data[i:i + k]
+        for index in range(0, len(data) - k + 1, k):
+            substring: str = data[index:index + k]
             if substring in frequencies:
                 frequencies[substring] += 1
             else:
@@ -98,7 +101,7 @@ class Huffman(Encoding):
 
         # Add a padding char for encoded segementing to ensure last segment is full
         if add_padding:
-            frequencies[Huffman.CHUNKING_PADDING_CHAR] = 1
+            frequencies[Huffman.CHUNKING_PADDING_CHAR] = 0
 
         # Set up our priority queue with the frequencies
         self.priority_queue.build_queue(frequencies)
@@ -194,6 +197,12 @@ class Huffman(Encoding):
         Returns:
             The segment with added padding if necessary.
         """
+        if payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0",
+                payload_length=payload_length
+            )
+
         if len(segment) < payload_length:
             padding_length: int = payload_length - len(segment)
             segment += huffman_codes[Huffman.CHUNKING_PADDING_CHAR] * padding_length
@@ -216,7 +225,17 @@ class Huffman(Encoding):
 
         Returns:
             A list of encoded segments as strings.
+
+        Raises:
+            PayloadLengthError: If the specified payload length is less than or equal to 0.
+            ValueError: If we cannot generate valid Huffman codes.
         """
+        if payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0",
+                payload_length=payload_length
+            )
+
         huffman_codes: dict[str, str]
         encoded_data: str
 
@@ -247,6 +266,9 @@ class Huffman(Encoding):
 
         Returns:
             A tuple containing the Huffman codes and the encoded data.
+
+        Raises:
+            ValueError: If we cannot generate valid Huffman codes.
         """
 
         # Build tree and generate Huffman codes
@@ -272,10 +294,11 @@ class Huffman(Encoding):
             The encoded data as a string.
 
         Raises:
-            FileNotFoundError: If the input file does not exist.
+            FileNotFoundError: If the input file does not exist or if output cannot be created/opened for writing.
+            ValueError: If we cannot generate valid Huffman codes. Or if saved encoded data is None or empty.
         """
         # Open the input file and read the data
-        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(in_path, 'r', encoding='utf-8') as f:
             data: str = f.read()
             if as_binary:
                 data = Encoding.ascii_to_binary(data)
@@ -303,6 +326,10 @@ class Huffman(Encoding):
 
         Returns:
             A dictionary mapping Huffman codes to their corresponding characters.
+
+        Raises:
+            FileNotFoundError: If the input file does not exist.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
         json_data = Encoding.read_json_table(json_path)
         return json_data[Encoding.ENCODED_DATA], json_data[Encoding.HUFFMAN_CODES]
@@ -374,6 +401,10 @@ class Huffman(Encoding):
 
         Returns:
             The decoded data as a string.
+
+        Raises:
+            FileNotFoundError: If the input file does not exist or if the output file cannot be created.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
         # Enocoded data is first
         encoded_data: str 
@@ -389,7 +420,7 @@ class Huffman(Encoding):
         if as_binary:
             decoded_data = Encoding.binary_to_ascii(decoded_data)
         
-        with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
+        with open(out_path, 'w', encoding='utf-8') as f:
             f.write(decoded_data)
 
         return decoded_data
@@ -400,11 +431,10 @@ class Huffman(Encoding):
         Estimates the number of DNA bases required to encode one byte of data using Huffman coding. Calculated based on
         the maximum from the average_bases_per_byte script.
 
-
         Returns:
             The estimated number of DNA bases per byte as a float.
         """
-        return 2.6
+        return self.ESTIMATED_BASES_PER_BYTE
     
 
     @override
@@ -417,6 +447,10 @@ class Huffman(Encoding):
 
         Returns:
             A tuple of the size of the encoded data in bits and size of the table in bits.
+
+        Raises:
+            FileNotFoundError: If the input file does not exist.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
         encoded_data: str
         huffman_codes: dict[str, str]
@@ -462,6 +496,8 @@ class Trenary(Huffman):
 
         self.ORDER = Huffman.TREE_ORDER
 
+        self.ESTIMATED_BASES_PER_BYTE: float = 3.3
+
 
     @override
     def _generate_codes(self) -> dict[str, str]:
@@ -475,7 +511,8 @@ class Trenary(Huffman):
             A dictionary mapping each character to its corresponding Huffman code.
 
         Raises:
-            ValueError: If the priority queue does not contain exactly one node (the root of the ternary Huffman).
+            ValueError: If the priority queue does not contain exactly one node (the root of the ternary Huffman). OR
+                if there are not enough characters in the tree order to assign to children.
         """
         # Ensure we only have one node left
         if self.priority_queue.size != 1:
@@ -527,7 +564,7 @@ class Trenary(Huffman):
         Returns:
             The estimated number of DNA bases per byte as a float.
         """
-        return 3.3
+        return self.ESTIMATED_BASES_PER_BYTE
 
 
 class Quaternary(Huffman):
@@ -547,6 +584,8 @@ class Quaternary(Huffman):
 
         self.ORDER = Huffman.TREE_ORDER
 
+        self.ESTIMATED_BASES_PER_BYTE: float = 2.6
+
         """
         All encoding methods can be created with standard tree and different constants
         """
@@ -561,7 +600,7 @@ class Quaternary(Huffman):
         Returns:
             The estimated number of DNA bases per byte as a float.
         """
-        return 2.6
+        return self.ESTIMATED_BASES_PER_BYTE
 
 
 class BitScanQuaternary(Quaternary):
@@ -594,6 +633,9 @@ class BitScanQuaternary(Quaternary):
         # Each value (DNA base) is stored as 2 bits
         self.VALUE_MULTIPLIER: int = 2
 
+        # Assume max, we will use function regardless
+        self.ESTIMATED_BASES_PER_BYTE: float = max(BitScanQuaternary.BITSCAN_BASES_PER_BYTE.values())
+
 
     def _calculate_coding_density(self, huffman_codes: dict[str, str]) -> float:
         """
@@ -625,6 +667,9 @@ class BitScanQuaternary(Quaternary):
 
         Returns:
             A tuple containing the Huffman codes and the encoded data.
+
+        Raises:
+            ValueError: If we cannot generate valid Huffman codes.
         """
 
         # Build tree and generate Huffman codes
@@ -633,18 +678,16 @@ class BitScanQuaternary(Quaternary):
         encoded_data: str = ""
 
         # Encode the data using the generated Huffman codes
-        for i in range(0, len(data) - self.K + 1, self.K):
-            substring: str = data[i:i + self.K]
-            if substring not in huffman_codes:
-                raise ValueError(f"Substring '{substring}' not found in Huffman codes.")
-            encoded_data += huffman_codes[substring]
+        for index in range(0, len(data) - self.K + 1, self.K):
+            substring: str = data[index:index + self.K]
+            if substring in huffman_codes:
+                encoded_data += huffman_codes[substring]
 
         # Add remaining characters if the length of the data is not a multiple of k
         if len(data) % self.K != 0:
             remaining_substring: str = data[len(data) - (len(data) % self.K):]
-            if remaining_substring not in huffman_codes:
-                raise ValueError(f"Remaining substring '{remaining_substring}' not found in Huffman codes.")
-            encoded_data += huffman_codes[remaining_substring]
+            if remaining_substring in huffman_codes:
+                encoded_data += huffman_codes[remaining_substring]
 
         # Return the table and encoded data as or string of encoded data
         return huffman_codes, encoded_data
@@ -665,9 +708,11 @@ class BitScanQuaternary(Quaternary):
             best encoded data.
 
         Raises:
-            ValueError: If the input data is empty or if min_k is greater than max_k
+            ValueError: If the input data is empty or if min_k is greater than max_k. Or if we cannot generate valid
+                Huffman codes.
+            FileNotFoundError: If the input file does not exist.
         """
-        with open(in_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(in_path, 'r', encoding='utf-8') as f:
             data: str = f.read()
 
         optimal_k: int = min_k
@@ -725,17 +770,26 @@ class Pgram(Huffman):
 
         Args:
             m: The maximum length of p-grams to consider for encoding
+
+        Raises:
+            ValueError: If the maximum p-gram length is less than 1.
         """
         super().__init__()
 
         # Max length of pgram
         self.M = m  
 
+        if self.M < 1:
+            raise ValueError("Maximum p-gram length must be greater than 0")
+
         self.EVEN: tuple[str, str] = ('G', 'T')
         self.ODD: tuple[str, str] = ('A', 'C')
 
         self.COMPLEMENT: dict[str, str] = {'A': 'G', 'C': 'T',
                                            'G': 'A', 'T': 'C'}
+
+        # Will use function, placeholder
+        self.ESTIMATED_BASES_PER_BYTE: float = max(Pgram.PGRAM_BASES_PER_BYTE.values())
         
 
     @override
@@ -750,7 +804,20 @@ class Pgram(Huffman):
         
         Returns:
             The segment with added padding if necessary.
+
+        Raises:
+            PayloadLengthError: If payload_length is less than or equal to 0.
+            Value Error: If segment length is empty
         """
+        if payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0",
+                payload_length=payload_length
+            )
+
+        if len(segment) == 0:
+            raise ValueError("Segment length must be greater than 0")
+
         # Get the padding character from the Huffman codes
         padding_code: str = huffman_codes[Huffman.CHUNKING_PADDING_CHAR]
 
@@ -868,17 +935,22 @@ class Pgram(Huffman):
             A tuple containing the encoded data as a string and the index of the last processed character.
 
         Raises:
+            PayloadLengthError: If payload_length is less than or equal to 0.
             ValueError: If previous base is not 1 and not in DNA sets
+            KeyError: If a substring is not found in the Huffman codes.
         """
         if len(previous_base) != 1 or previous_base not in Encoding.DNA_BASES:
             raise ValueError("Previous base must be a single character and one of the DNA bases.")
 
-        if payload_length is not None and payload_length <= 0:
-            raise ValueError("Payload length must be a positive integer.")
-
         if not payload_length:
             payload_length = len(data)
 
+        if payload_length is not None and payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0",
+                payload_length=payload_length
+            )
+        
         coded_message: str = ""
         index: int = 0
 
@@ -1002,7 +1074,17 @@ class Pgram(Huffman):
 
         Returns:
             A tuple containing the Huffman codes and the list of encoded segments.
+
+        Raises:
+            PayloadLengthError: If payload_length is less than or equal to 0.
+            IndexingError: If there are not enough previous sequences to cover the number of segments.
+            ValueError: If we cannot generate valid Huffman codes.
         """
+        if payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0",
+                payload_length=payload_length
+            )
 
         # Build our trees and get our codes
         self._build_tree(data, add_padding=True)
@@ -1018,6 +1100,14 @@ class Pgram(Huffman):
 
         # While we still have data to encode, build the optimal coding for next segment and append it
         while data_length > 0:
+            # IF we go out of bounds we need to know that we don't have enough previous sequences (indices) available
+            if bases_index >= len(previous_sequences):
+                raise IndexingError(
+                    message="Not enough previous sequences provided for the number of segments",
+                    index=bases_index
+                )
+
+            # Build the optimal coding for the next segment of data
             encoded_message, last_data_index = self._build_optimal_coding(
                 data[len(data) - data_length:], 
                 huffman_codes, 
@@ -1049,8 +1139,12 @@ class Pgram(Huffman):
 
         Returns:
             A tuple containing the Huffman codes and the encoded data.
-        """
 
+        Raises:
+            ValueError: If we cannot generate valid Huffman codes or if the input data is empty.
+            PayloadLengthError: If data is less than or equal to 0.
+            KeyError: If a substring is not found in the Huffman codes.
+        """
         self._build_tree(data)
         huffman_codes: dict[str, str] = self._generate_codes()
         encoded_message: str 
@@ -1164,6 +1258,8 @@ class Goldman(Huffman):
 
         self.ORDER = Huffman.GOLDMAN_ORDER
 
+        self.ESTIMATED_BASES_PER_BYTE: float = 3.2
+
 
     def trit_encode(self, data: str) -> str:
         """
@@ -1174,6 +1270,9 @@ class Goldman(Huffman):
 
         Returns:
             The encoded data as a string of trits.
+
+        Raises:
+            ValueError: If we cannot generate valid Huffman codes.
         """
         self._build_tree(data)
         huffman_codes: dict[str, str] = self._generate_codes()
@@ -1194,15 +1293,22 @@ class Goldman(Huffman):
             The a string of the mapped DNA bases with no homopolymers.
 
         Raises:
-            ValueError: If a trit is not found in the Huffman codes or if the start base is not valid.
+            EncodingError: If a trit is not found in the rotating map or if the start base is not valid.
+            ValueError: If the start base is not a valid DNA base for the rotating map.
         """
+        if start_base not in Goldman.ROTATING_MAP:
+            raise ValueError(f"Start base '{start_base}' is not a valid DNA base for the rotating map.")
+
         dna_string: str = ""
         # Always assume we start with the specified base
         previous_base: str = start_base
 
         for trit in trit_data:
             if trit not in Goldman.ROTATING_MAP[previous_base]:
-                raise ValueError(f"Trit '{trit}' not found in the rotating map for base '{previous_base}'.")
+                raise EncodingError(
+                    message=f"Trit '{trit}' not found in the rotating map for base '{previous_base}'",
+                    encoding_method=self.__class__.__name__
+                )
 
             # Get the next base from the rotating map
             next_base: str = Goldman.ROTATING_MAP[previous_base][trit]
@@ -1233,8 +1339,18 @@ class Goldman(Huffman):
             A tuple containing the Huffman codes and the encoded data.
 
         Raises:
-            ValueError: If the length of the previous bases list is less than the number of segments
+            PayloadLengthError: If payload_length is less than or equal to 0.
+            ValueError: If the length of the previous bases list is less than the number of segments. Or if we cannot 
+                generate valid Huffman codes. Or if the previous base is not a valid DNA base for the rotating map.
+            IndexingError: If there are not enough previous sequences or if the sequence length is too small.
+            EncodingError: If a trit is not found in the rotating map or if the start base is not valid.
         """
+        if payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0",
+                payload_length=payload_length
+            )
+
         self._build_tree(data, add_padding=True)
         huffman_codes: dict[str, str] = self._generate_codes()
         trit_encoded_data: str = "".join(huffman_codes[char] for char in data)
@@ -1249,8 +1365,18 @@ class Goldman(Huffman):
             else:
                 trit_segment: str = trit_encoded_data[index:index + payload_length]
 
+            where: int = index // payload_length
+
+            # Our previous sequences list needs to be long enough to cover the number of segments we are encoding
+            if where >= len(previous_sequences) or 0 >= len(previous_sequences[where]):
+                raise IndexingError(
+                    message="Not enough previous sequences provided for the number of segments to encode or sequence " \
+                            "length is too small",
+                    index=where
+                )
+
             # Index needs to be put back to normal for previous base list
-            previous_base: str = previous_sequences[index // payload_length][-1]
+            previous_base: str = previous_sequences[where][-1]
 
             # If we need to add padding to the last segment, do it here
             trit_segment = self._add_padding(trit_segment, payload_length, huffman_codes)
@@ -1275,6 +1401,11 @@ class Goldman(Huffman):
 
         Returns:
             A tuple containing the Huffman codes and the encoded data.
+
+        Raises:
+            ValueError: If we cannot generate valid Huffman codes. Or if the stat base is not a valid DNA base for 
+                the rotating map. Or if the input data is empty.
+            EncodingError: If a trit is not found in the rotating map or if the start base is not valid.
         """
         self._build_tree(data)
         huffman_codes: dict[str, str] = self._generate_codes()
@@ -1297,7 +1428,7 @@ class Goldman(Huffman):
             The a string of the mapped trits.
 
         Raises:
-            ValueError: If a base is not found in the rotating map complement for the previous base.
+            EncodingError: If a base is not found in the rotating map complement or if the start base is not valid.
         """
         trit_string: str = ""
         # Always assume we start with the specified base
@@ -1305,7 +1436,10 @@ class Goldman(Huffman):
 
         for base in encoded_data:
             if base not in Goldman.ROTATING_MAP_COMPLEMENT[previous_base]:
-                raise ValueError(f"Base '{base}' not found in the rotating map complement for base '{previous_base}'.")
+                raise EncodingError(
+                    message=f"Base '{base}' not found in the rotating map complement for base '{previous_base}'",
+                    encoding_method=self.__class__.__name__
+                )
 
             # Get the corresponding trit from the rotating map complement
             trit: str = Goldman.ROTATING_MAP_COMPLEMENT[previous_base][base]
@@ -1322,7 +1456,6 @@ class Goldman(Huffman):
                         encoded_data: list[str], 
                         huffman_codes: dict[str, str],
                         *,
-                        payload_length: int, 
                         previous_sequences: list[str]) -> list[str]:
         """
         Decodes the encoded data with Goldman's rotating tree approach using the provided Huffman codes and a specified
@@ -1331,22 +1464,29 @@ class Goldman(Huffman):
         Args:
             encoded_data: The encoded data to be decoded as a list of strings.
             huffman_codes: A dictionary mapping Huffman codes to their corresponding characters.
-            payload_length: The length of each segment in the encoded data.
             previous_sequences: A list of previous sequences (like the index or primer) for the mapping.
 
         Returns:
             A list of strings, where each string corresponds to a decoded segment.
 
         Raises:
-            ValueError: If the length of the encoded data does not match the length of the previous sequences list.
+            EncodingError: If a base is not found in the rotating map complement or if the start base is not valid.
+            IndexingError: If there are not enough previous sequences or if the sequence length is too small.
         """
-        if len(previous_sequences) < (len(encoded_data) // payload_length):
-            raise ValueError("Not enough previous sequences provided for the number of segments to encode.")
 
         decoded_segments: list[str] = []
 
         # Append the trit segments to a list with being aware what starting base we are using for each segment
         for index, segment in enumerate(encoded_data):
+            # Must have enough previous sequences to cover the number of segments we are decoding, and the sequence 
+            #   length must be longer than 0 so we can get last base
+            if index >= len(previous_sequences) or 0 >= len(previous_sequences[index]):
+                raise IndexingError(
+                    message="Not enough previous sequences provided for the number of segments to decode or sequence "\
+                            "length is too small",
+                    index=index
+                )
+
             previous_base: str = previous_sequences[index][-1]
             trit_segment: str = self.dna_to_trit(segment, start_base=previous_base)
 
@@ -1369,6 +1509,9 @@ class Goldman(Huffman):
 
         Returns:
             The decoded data as a string.
+
+        Raises:
+            EncodingError: If a base is not found in the rotating map complement.
         """
         # Decode the encoded data
         trit_data: str = self.dna_to_trit(encoded_data)
@@ -1383,7 +1526,7 @@ class Goldman(Huffman):
         Returns:
             The estimated number of DNA bases per byte as a float.
         """
-        return 3.2
+        return self.ESTIMATED_BASES_PER_BYTE
 
 
     @override

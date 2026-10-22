@@ -7,6 +7,7 @@ Uses both standard DNA mapping and Huffman coding for compression.
 """
 
 from typing import Any, Final, override
+from Encode.Helpers.Errors import PayloadLengthError
 from Encode.Methods.Encoding import Encoding
 from Encode.Methods.HuffmanCoding import Huffman
 
@@ -22,6 +23,8 @@ class DNAMap(Encoding):
 
         # Each DNA base represents 2 bits, so we set the bit multiplier accordingly
         self.BIT_MULTIPLIER = 2
+        
+        self.ESTIMATED_BASES_PER_BYTE: float = 4.0 
 
 
     @override
@@ -39,7 +42,7 @@ class DNAMap(Encoding):
 
         Raises:
             FileNotFoundError: If the input JSON file does not exist.
-            ValueError: If the JSON file is empty or does not contain the expected keys.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
         json: dict[str, Any] = Encoding.read_json_table(json_path)
         return json[Encoding.ENCODED_DATA], json[Encoding.HAS_SINGLE_PADDING]
@@ -86,7 +89,17 @@ class DNAMap(Encoding):
 
         Returns:
             A tuple containing the mapping used for encoding and a list of DNA segments, each of the specified payload length.
+        
+        Raises:
+            ValueError: If the binary string is empty or if the payload length is not greater than 0.
+            PayloadLengthError: If the payload length is not greater than 0.
         """
+        if payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0.",
+                payload_length=payload_length
+            )
+
         mapping: dict[str, str]
         dna_string: str
 
@@ -118,9 +131,16 @@ class DNAMap(Encoding):
         Returns:
             A tuple containing a boolean indicating whether padding was added, the resulting DNA sequence and the 
             mapping used for encoding.
+
+        Raises:
+            ValueError: If the binary string is empty.
+            KeyError: If the binary string contains characters other than '0' and '1'.
         """
         # Remove any leading/trailing whitespace, causes problems
         binary_string = binary_string.strip()
+
+        if binary_string == "":
+            raise ValueError("Binary string cannot be empty.")
 
         # Pad the binary string to make its length a multiple of 2
         dna_string: str = ""
@@ -153,16 +173,17 @@ class DNAMap(Encoding):
             The encoded DNA sequence.
 
         Raises:
-            FileNotFoundError: If the input file does not exist.
-            ValueError: If the input file is empty or if the binary string is empty.
+            FileNotFoundError: If the input file does not exist and output file cannot be created/opened.
+            ValueError: If the input file is empty or if the binary string is empty, or if encoded data is None.
+            UnicodeDecodeError: If the input file contains characters that cannot be decoded using UTF-8.
         """
         # Read the original final
-        with open(in_path, 'r', encoding='utf-8', errors='ignore') as input_file:
+        with open(in_path, 'r', encoding='utf-8') as input_file:
             raw_text: str = input_file.read()
 
         # Convert the raw text to a binary string
         if not as_binary:
-            binary_string: str = self.ascii_to_binary(raw_text)
+            binary_string: str = Encoding.ascii_to_binary(raw_text)
 
         # Check if the binary string is empty
         if not binary_string:
@@ -189,11 +210,18 @@ class DNAMap(Encoding):
         
         Returns:
             A list of binary strings corresponding to the decoded DNA segments.
+
+        Raises:
+            ValueError: If any of the DNA segments are empty or contain invalid characters.
+            KeyError: If the DNA segments contain characters not in the reverse DNA map.
         """
         binary_segments: list[str] = []
 
         # Go through each segment and decode back to binary (decoding each ascii does not work here, need entire string)
         for segment in encoded_data:
+            if not segment:
+                raise ValueError("DNA segment cannot be empty.")
+            
             binary_segment: str = ""
             for base in segment:
                 binary_segment += self.REVERSE_DNA_MAP[base]
@@ -215,6 +243,10 @@ class DNAMap(Encoding):
 
         Returns:
             The decoded binary string.
+
+        Raises:
+            ValueError: If the DNA string is empty or contains invalid characters.
+            KeyError: If the DNA string contains characters not in the reverse DNA map.
         """
         # Decode the DNA string back to binary
         binary_string: str = ""
@@ -240,6 +272,9 @@ class DNAMap(Encoding):
 
         Returns:
             The decoded binary string.
+
+        Raises:
+            FileNotFoundError: If the input JSON file does not exist or output file cannot be created.
         """
         dna_string: str = ""
         has_padding: bool
@@ -250,7 +285,7 @@ class DNAMap(Encoding):
         decoded_data: str = Encoding.binary_to_ascii(binary_string)
 
         # Write the decoded data to the output file
-        with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
+        with open(out_path, 'w', encoding='utf-8') as f:
             f.write(decoded_data)
 
         return decoded_data
@@ -277,7 +312,7 @@ class DNAMap(Encoding):
         Returns:
             The estimated number of DNA bases per byte.
         """
-        return 4.0
+        return self.ESTIMATED_BASES_PER_BYTE
     
 
     @override
@@ -292,7 +327,7 @@ class DNAMap(Encoding):
             The size of the encoded data in bits and the size of the table in bits.
 
         Raises:
-            ValueError: If the encoded data format is invalid.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
         encoded_size: int = 0
         table_size: int = 0
@@ -313,6 +348,8 @@ class DNAMapHuffman(DNAMap):
         Initializes the DNAMapHuffman class.
         """
         super().__init__()
+
+        self.ESTIMATED_BASES_PER_BYTE: float = 2.6
     
 
     @override
@@ -330,7 +367,7 @@ class DNAMapHuffman(DNAMap):
 
         Raises:
             FileNotFoundError: If the input JSON file does not exist.
-            ValueError: If the JSON file is empty or does not contain the expected keys.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
         json: dict[str, Any] = Encoding.read_json_table(json_path)
         return json[Encoding.ENCODED_DATA], json[Encoding.HUFFMAN_CODES], json[Encoding.HAS_SINGLE_PADDING]
@@ -351,7 +388,18 @@ class DNAMapHuffman(DNAMap):
 
         Returns:
             A tuple containing a dictionary of Huffman codes and a list of DNA segments, each of the specified payload length.
+        
+        Raises:
+            PayloadLengthError: If the payload length is not greater than 0.
+            ValueError: If the binary string is empty.
+            KeyError: If the binary string contains characters other than '0' and '1'.
         """
+        if payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0.",
+                payload_length=payload_length
+            )
+
         huffman_codes: dict[str, str]
         encoded_data: list[str]
 
@@ -385,6 +433,10 @@ class DNAMapHuffman(DNAMap):
         Returns:
             A tuple containing the encoded DNA sequence, a boolean indicating whether padding was added during encoding,
             and a dictionary of Huffman codes.
+
+        Raises:
+            ValueError: If the binary string is empty.
+            KeyError: If the binary string contains characters other than '0' and '1'.
         """
 
         huffman_codes: dict[str, str]
@@ -413,8 +465,10 @@ class DNAMapHuffman(DNAMap):
             The encoded DNA sequence with tabel.
 
         Raises:
-            ValueError: If the input file is empty or if the binary string is empty.
-            FileNotFoundError: If the input file does not exist.
+            ValueError: If the input file is empty or if the binary string is empty. Or if the encoded data is None.
+            FileNotFoundError: If the input file does not exist or if the output file cannot be created. Or if the out
+                file cannot be opened/created for writing.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
 
         binary_string: str 
@@ -436,9 +490,8 @@ class DNAMapHuffman(DNAMap):
     def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
         """
         Decodes a list of DNA segments back into binary. DOES NOT RETURN HUFFMAN DECODED, NEEDS TO BE DECODED AFTER.
-        Since we cannot decode by segment, we need to decode the entire string after decoding the segments. The decode 
-        segments part will be needed to add inner error correction in the future. Basically, to decode we combine 
-        segements then perform Huffman decoding on the entire string (and remove the padding 0).
+        Since we cannot decode by segment, we need to decode the entire string after decoding the segments. Basically, 
+        to decode we combine segements then perform Huffman decoding on the entire string (and remove the padding 0).
 
         Args:
             encoded_data: A list of DNA segments to be decoded.
@@ -446,6 +499,10 @@ class DNAMapHuffman(DNAMap):
 
         Returns:
             The decoded binary strings BEFORE Huffman decoding, which can then be decoded using the Huffman codes.
+        
+        Raises:
+            ValueError: If the input data is invalid.
+            KeyError: If the input data contains keys that are not expected.
         """
 
         return super().decode_segments(encoded_data)
@@ -464,6 +521,10 @@ class DNAMapHuffman(DNAMap):
 
         Returns:
             The decoded binary string.
+
+        Raises:
+            ValueError: If the input data is invalid.
+            KeyError: If the input data contains keys that are not expected.
         """
         binary_string: str = super().decode(encoded_data, has_padding=has_padding)
         ascii_string: str = Encoding.binary_to_ascii(binary_string)
@@ -472,7 +533,6 @@ class DNAMapHuffman(DNAMap):
         return decoded_data
 
 
-    # TODO: again very jank probably should change
     @override
     def decode_to_file(self, json_path: str, out_path: str, as_binary: bool = False) -> str: 
         """
@@ -488,7 +548,8 @@ class DNAMapHuffman(DNAMap):
 
         Raises:
             ValueError: If the input format is invalid or if the Huffman table cannot be parsed
-            FileNotFoundError: If the input file does not exist.
+            FileNotFoundError: If the input file does not exist or if the output file cannot be created.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
         # Read the DNA string from the input file
         dna_string: str
@@ -507,7 +568,7 @@ class DNAMapHuffman(DNAMap):
         decoded_data: str = Huffman().decode(binary_string, huffman_codes)
 
         # Write the decoded data to the output file
-        with open(out_path, 'w', encoding='utf-8', errors='ignore') as f:
+        with open(out_path, 'w', encoding='utf-8') as f:
             f.write(decoded_data)
 
         return decoded_data
@@ -522,7 +583,7 @@ class DNAMapHuffman(DNAMap):
         Returns:
             The estimated number of DNA bases per byte.
         """
-        return 2.6
+        return self.ESTIMATED_BASES_PER_BYTE
 
 
     @override
@@ -535,5 +596,9 @@ class DNAMapHuffman(DNAMap):
 
         Returns:
             The size of the encoded data in bits and the size of the table in bits.
+
+        Raises:
+            JSONError: If the JSON file is empty or does not contain the expected keys.
+            FileNotFoundError: If the input JSON file does not exist.
         """
         return Huffman().calculate_overall_size(json_path)
