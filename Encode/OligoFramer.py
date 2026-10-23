@@ -3,7 +3,7 @@ from functools import lru_cache
 from reedsolo import ReedSolomonError
 from typing import Any, Generator
 from pathlib import Path
-from Encode.Helpers.Errors import Error, ExpectedLengthError, PayloadLengthError, RankError
+from Encode.Helpers.Errors import Error, ExpectedLengthError, IndexingError, PayloadLengthError, RankError
 from Encode.Methods.Encoding import Encoding
 from Encode.Indexer import Indexer
 from Encode.ErrorCorrection.InnerCodes import CheckSum, ReedSolomon
@@ -14,7 +14,7 @@ class OligoFramer:
     A class for framing oligos with specific sequences and lengths.
     """
     # Maximum iterations for index width convergence
-    MAX_ITERATIONS: int = 32  
+    MAX_ITERATIONS: int = 32
 
     def __init__(self, 
                  in_path: str,
@@ -47,23 +47,23 @@ class OligoFramer:
         print(f"Start primer: {self.start_primer}, End primer: {self.end_primer}")
 
         # Need to see how much width is left for the payload to determine the number of oligos and the index width
-        width_left: int = 0
-        width_left += oligo_length - len(self.start_primer) - len(self.end_primer) - self.checksum.get_dna_bases()
+        self.width_left: int = 0
+        self.width_left += oligo_length - len(self.start_primer) - len(self.end_primer) - self.checksum.get_dna_bases()
         # If we have inner codes, we need to ensure we count them
         if self.inner_error_correction:
-            width_left -= self.inner_error_correction.get_dna_bases()
+            self.width_left -= self.inner_error_correction.get_dna_bases()
         
         self.num_oligos: int = 0
         # Determine the number of oligos and the index width based on the available width and overhead margin
         self.num_oligos, self.indexer.width = OligoFramer.determine_oligos_and_width(
-            overhead_margin, width_left, self.MAX_ITERATIONS,
-            self.in_path,
-            self.encoder, self.indexer
+            overhead_margin=overhead_margin, width_left=self.width_left,
+            in_path=self.in_path,
+            encoder=self.encoder, indexer=self.indexer
         )
-        width_left -= self.indexer.width
+        self.width_left -= self.indexer.width
 
         # Finally, the most important value, the payload length, which can be found after the index width is determined
-        self.payload_length: int = width_left
+        self.payload_length: int = self.width_left
 
         if self.payload_length <= 0:
             raise PayloadLengthError(
@@ -71,11 +71,23 @@ class OligoFramer:
                 payload_length=self.payload_length
             )
 
-        self.huffman_codes: dict[str, str] | None = None
+    @property
+    def indexer_width(self) -> int:
+        """
+        Returns the index width for the oligos.
+        """
+        return self.indexer.width
+
+    @property
+    def total_oligos(self) -> int:
+        """
+        Returns the number of oligos needed to encode the input file.
+        """
+        return self.num_oligos
 
 
     @staticmethod
-    def determine_oligos_and_width(overhead_margin: float, width_left: int, max_iterations: int,
+    def determine_oligos_and_width(overhead_margin: float, width_left: int,
                                    in_path: str,
                                    encoder: Encoding, indexer: Indexer) -> tuple[int, int]:
         """
@@ -112,9 +124,10 @@ class OligoFramer:
 
         # For each iteration, calculate the number of oligos and the required index width
         index_width: int = 0
-        for _ in range(max_iterations):
+        for _ in range(OligoFramer.MAX_ITERATIONS):
             payload_bases: int = width_left - index_width
 
+            # Not enough payload room, raise an error
             if payload_bases <= 0:
                 raise PayloadLengthError(
                     message="No payload room remains at the current index width", 
@@ -122,14 +135,63 @@ class OligoFramer:
                 )
 
             num_oligos: int = math.ceil(margined_bases / payload_bases)
-            required_index_width: int = indexer.determine_optimal_width(num_oligos, max_run_length=indexer.max_run_length)
+            required_index_width: int = indexer.determine_optimal_width(
+                required_capacity=num_oligos, 
+                max_run_length=indexer.max_run_length
+            )
 
             if required_index_width == index_width:
                 return num_oligos, index_width
 
             index_width = required_index_width
 
-        raise RuntimeError(f"Index width did not converge after {max_iterations} iterations.")
+        raise RuntimeError(f"Index width did not converge after {OligoFramer.MAX_ITERATIONS} iterations.")
+
+
+    def _generate_segments(self, file_content: str) -> tuple[list[str], dict[str, str], list[str]]:
+        """
+        Generates a list of index sequences for the number of oligos needed to encode the input file.
+
+        Args:
+            file_content: The content of the input file as a string.
+        
+        Returns:
+            A tuple containing:
+                - A list of index sequences for the number of oligos needed to encode the input file.
+                - A dictionary mapping each unique symbol in the input file to its corresponding Huffman code.
+                - A list of encoded segments corresponding to the input file content.
+
+        Raises:
+            FileNotFoundError: If the input file does not exist.
+            PayloadLengthError: If the payload length is less than or equal to 0.
+            UnrankError: If the index sequence is not in bounds of capacity.
+        """
+
+        # Get all indices and previous bases for the indexer
+        indices: list[str] = []
+        # Generate only the indices needed for the current segment estimate.
+        for index in range(self.num_oligos):
+            index_sequence: str = self.indexer.unrank(
+                index=index, 
+                before_sequence=self.start_primer[-1], 
+                after_sequence=Huffman.START_BASE
+            )
+            indices.append(index_sequence)
+
+        # Encode the file content into segments
+        items: tuple[dict[str, str], list[str], Any] = self.encoder.encode_segments(
+            data=file_content, 
+            payload_length=self.payload_length, 
+            previous_sequences=indices
+        )
+
+        huffman_codes: dict[str, str] = items[0]
+        encoded_segments: list[str] = items[1]
+
+        # Update our number of oligos based on the actual number of encoded segments
+        self.num_oligos = len(encoded_segments)
+
+        return indices, huffman_codes, encoded_segments
 
 
     def frame_oligo(self, index_sequence: str, payload_sequence: str, include_primers: bool = True) -> str:
@@ -195,6 +257,8 @@ class OligoFramer:
 
         Raises:
             FileNotFoundError: If the input file does not exist.
+            IndexerError: If the index sequence is not in bounds of capacity (shoulnd't happen since we adjust before hand
+                but it can be raised while framing if index goes out of bounds).
             UnicodeDecodeError: If the input file cannot be read as UTF-8.
             UnrankError: If the index sequence is not in bounds of capacity.
         """
@@ -202,25 +266,30 @@ class OligoFramer:
         with open(self.in_path, "r", encoding="utf-8") as file:
             file_content: str = file.read()
 
-        # Get all indices and previous bases for the indexer
-        indices: list[str] = []
-        for index in range(self.num_oligos):
-            index_sequence: str = self.indexer.unrank(
-                index=index, 
-                before_sequence=self.start_primer[-1], 
-                after_sequence=Huffman.START_BASE
-            )
-            indices.append(index_sequence)
+        indices: list[str] 
+        huffman_codes: dict[str, str]
+        encoded_segments: list[str]
+        # While we don't have enough indicies for number of segments, keep increasing the index width and trying again
+        while True:
+            try:
+                indices, huffman_codes, encoded_segments = self._generate_segments(file_content)
+            except IndexingError:
+                # The estimate did not provide enough indices for the encoder's actual segment count.
+                self.width_left -= 1
+                self.indexer.width += 1
+                self.payload_length = self.width_left
+                continue
 
-        # Encode the file content into segments
-        items: tuple[dict[str, str], list[str], Any] = self.encoder.encode_segments(
-            file_content, 
-            self.payload_length, 
-            previous_sequences=indices
-        )
-        self.huffman_codes = items[0]
-        encoded_segments: list[str] = items[1]
+            # While we don't have enough indices for the number of encoded segments, increase our width and try again
+            if self.indexer.calculate_total_valid_indices() >= self.num_oligos:
+                break
 
+            # Increase the index width and recalculate the payload length
+            self.width_left -= 1
+            self.indexer.width += 1
+            self.payload_length = self.width_left
+
+        # And frame them
         framed_oligos: list[str] = []
         for index, payload_sequence in enumerate(encoded_segments):
             framed_oligo: str = self.frame_oligo(indices[index], payload_sequence) 

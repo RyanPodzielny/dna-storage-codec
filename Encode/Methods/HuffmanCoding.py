@@ -196,6 +196,10 @@ class Huffman(Encoding):
         
         Returns:
             The segment with added padding if necessary.
+
+        Raises:
+            PayloadLengthError: If payload_length is less than or equal to 0, or if segment length is greater than 
+                payload_length.
         """
         if payload_length <= 0:
             raise PayloadLengthError(
@@ -203,18 +207,65 @@ class Huffman(Encoding):
                 payload_length=payload_length
             )
 
+        # This is a big problem, if segment is longer than payload it means our last segment is too long, which 
+        #   should never happen.
+        if len(segment) > payload_length:
+            raise PayloadLengthError(
+                message="Segment length must be less than or equal to payload length",
+                payload_length=payload_length
+            )
+
+        # If the segment is shorter than the payload length, we need to add padding
         if len(segment) < payload_length:
             padding_length: int = payload_length - len(segment)
             segment += huffman_codes[Huffman.CHUNKING_PADDING_CHAR] * padding_length
         segment = segment[:payload_length]
         
         return segment
-    
+
+    def _encode_segment_payload(self,
+                                current_segment: str,
+                                encoded_substring: str,
+                                payload_length: int,
+                                segments: list[str],
+                                huffman_codes: dict[str, str]) -> str:
+        """
+        Encodes the current segment and adds it to the list of segments. If the current segment is longer than the 
+        payload length, it will be truncated and padded.
+
+        Args:
+            current_segment: The current segment of encoded data to be added to the list of segments.
+            encoded_substring: The encoded substring to append to the current segment.
+            payload_length: The desired length of each segment.
+            segments: List of segments which current segments will be added (pass by refernece, orginal gets modified).
+            huffman_codes: A dictionary mapping each character to its corresponding Huffman code.
+
+        Raises:
+            PayloadLengthError: If payload_length is less than or equal to 0, or if current_segment length is greater 
+                than payload_length.
+        """
+        current_segment += encoded_substring
+
+        # If the current segment is longer than the payload length, we need to truncate it and add padding
+        if len(current_segment) > payload_length:
+            current_segment = current_segment[:-len(encoded_substring)]
+            current_segment = self._add_padding(current_segment, payload_length, huffman_codes)
+            segments.append(current_segment)
+            return encoded_substring
+
+        # If the current segment is exactly the payload length, we can add it to the list of segments
+        if len(current_segment) == payload_length:
+            segments.append(current_segment)
+            return ""
+
+        return current_segment
+
 
     @override
     def encode_segments(self, 
                         data: str, 
                         payload_length: int, 
+                        k = 1,
                         *args, **kwargs) -> tuple[dict[str, str], list[str]]:
         """
         Encodes the given data using the generated Huffman codes into segments of a specified payload length.
@@ -239,18 +290,42 @@ class Huffman(Encoding):
         huffman_codes: dict[str, str]
         encoded_data: str
 
-        self._build_tree(data, add_padding=True)
+        self._build_tree(data, k, add_padding=True)
         huffman_codes = self._generate_codes()
-        encoded_data = "".join(huffman_codes[char] for char in data)
 
-        # Split the encoded data into segments of the specified payload length
         segments: list[str] = []
-        for index in range(0, len(encoded_data), payload_length):
-            segment: str = encoded_data[index:index + payload_length]
-            segments.append(segment)
+        current_segment: str = ""
 
+        # We want to ech huffman code up until the payload length, if we go over, drop, if we are exactly, add to 
+        #   segments and reset
+        for index in range(0, len(data) - k + 1, k):
+            substring: str = data[index:index + k]
+            current_segment = self._encode_segment_payload(
+                current_segment=current_segment,
+                encoded_substring=huffman_codes[substring],
+                payload_length=payload_length,
+                segments=segments,
+                huffman_codes=huffman_codes,
+            )
+
+        # If not multiple of K, add the remaining characters
+        if len(data) % k != 0:
+            remaining_substring: str = data[len(data) - (len(data) % k):]
+            current_segment = self._encode_segment_payload(
+                current_segment=current_segment,
+                encoded_substring=huffman_codes[remaining_substring],
+                payload_length=payload_length,
+                segments=segments,
+                huffman_codes=huffman_codes,
+            )
+
+        # If there is any remaining data in the current segment, add it to the segments list
+        if len(current_segment) > 0:
+            segments.append(current_segment)
+       
         # If the last segment is not the full length, add padding
-        segments[-1] = self._add_padding(segments[-1], payload_length, huffman_codes)
+        if len(segments[-1]) < payload_length:
+            segments[-1] = self._add_padding(segments[-1], payload_length, huffman_codes)
         
         return huffman_codes, segments
     
@@ -604,8 +679,10 @@ class Quaternary(Huffman):
 
 
 class BitScanQuaternary(Quaternary):
-    # Measured bases per byte by bit-scan length maximum, rounded up I know constants aren't great, but easiest way
-    #   to get a good estimate of the average bases per byte for each bit-scan length. 
+    # Measured bases per byte by bit-scan length maximum, rounded up I know constants aren't great. But easiest way
+    #   to get a good estimate of the average bases per byte for each bit-scan length. They are also pretty innacurate
+    #   the larger you go (just by variance of the data) but are a good starting point to determine width. Worst case
+    #   is we need to regenerate the encoded segs with a new width if we are too innacurate with num oligos.
     BITSCAN_BASES_PER_BYTE: Final[dict[int, float]] = {
         4: 3.7, 5: 4.1, 6: 3.9, 7: 4.0, 8: 2.6, 9: 3.8, 10: 3.4, 11: 3.5,
         12: 2.8, 13: 3.3, 14: 2.9, 15: 3.0, 16: 2.1, 17: 2.9, 18: 2.6, 19: 2.7,
@@ -654,6 +731,11 @@ class BitScanQuaternary(Quaternary):
         
         coding_density: float = self.K / average_code_length
         return coding_density
+
+
+    @override
+    def encode_segments(self, data: str, payload_length: int, *args, **kwargs) -> tuple[dict[str, str], list[str]]:
+        return super().encode_segments(data, payload_length, self.K, *args, **kwargs)
 
 
     @override
@@ -806,12 +888,19 @@ class Pgram(Huffman):
             The segment with added padding if necessary.
 
         Raises:
-            PayloadLengthError: If payload_length is less than or equal to 0.
-            Value Error: If segment length is empty
+            PayloadLengthError: If payload_length is less than or equal to 0, or if segment length is greater than 
+                payload_length.
+            ValueError: If segment length is empty
         """
         if payload_length <= 0:
             raise PayloadLengthError(
                 message="Payload length must be greater than 0",
+                payload_length=payload_length
+            )
+
+        if len(segment) > payload_length:
+            raise PayloadLengthError(
+                message="Segment length must be less than or equal to payload length",
                 payload_length=payload_length
             )
 
@@ -1353,39 +1442,41 @@ class Goldman(Huffman):
 
         self._build_tree(data, add_padding=True)
         huffman_codes: dict[str, str] = self._generate_codes()
-        trit_encoded_data: str = "".join(huffman_codes[char] for char in data)
 
+        trit_segments: list[str] = []
+        current_segment: str = ""
+        # For every character in the data, encode it and add it to the current segment. If the current segment is full,
+        #   append it to the list of segments and start a new segment.
+        for char in data:
+            current_segment = self._encode_segment_payload(
+                current_segment=current_segment,
+                encoded_substring=huffman_codes[char],
+                payload_length=payload_length,
+                segments=trit_segments,
+                huffman_codes=huffman_codes,
+            )
+
+        # If any remaining add
+        if len(current_segment) > 0:
+            trit_segments.append(current_segment)
+
+        # And add some paddding
+        trit_segments[-1] = self._add_padding(trit_segments[-1], payload_length, huffman_codes)
+
+        # Now convert to trits, to dna, and append to the encoded message list
         encoded_message: list[str] = []
-
-        # Go by the payload length and encode each segment with the corresponding previous base
-        for index in range(0, len(trit_encoded_data), payload_length):
-            # If goes over, just take what we can
-            if index + payload_length > len(trit_encoded_data):
-                trit_segment: str = trit_encoded_data[index:]
-            else:
-                trit_segment: str = trit_encoded_data[index:index + payload_length]
-
-            where: int = index // payload_length
-
-            # Our previous sequences list needs to be long enough to cover the number of segments we are encoding
-            if where >= len(previous_sequences) or 0 >= len(previous_sequences[where]):
+        for index, trit_segment in enumerate(trit_segments):
+            # Ensure we have enough previous sequences to cover the number of segments we are encoding, and the sequence
+            if index >= len(previous_sequences) or not previous_sequences[index]:
                 raise IndexingError(
                     message="Not enough previous sequences provided for the number of segments to encode or sequence " \
                             "length is too small",
-                    index=where
+                    index=index
                 )
 
-            # Index needs to be put back to normal for previous base list
-            previous_base: str = previous_sequences[where][-1]
-
-            # If we need to add padding to the last segment, do it here
-            trit_segment = self._add_padding(trit_segment, payload_length, huffman_codes)
-
-            # Our DNA encoding is based on the previous base, so we need to pass that in
-            encoded_segment: str = self.trit_to_dna(trit_segment, start_base=previous_base)
-
-            encoded_message.append(encoded_segment)
-
+            # Map back to dna and append
+            mapped_dna: str = self.trit_to_dna(trit_segment, start_base=previous_sequences[index][-1])
+            encoded_message.append(mapped_dna)
 
         return huffman_codes, encoded_message
 

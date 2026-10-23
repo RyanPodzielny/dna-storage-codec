@@ -13,7 +13,7 @@ class CheckSum:
     space as the inner code will already provide some error correction.
     """
 
-    def __init__(self, indexer: type[Indexer], inner_code: bool = False, max_run_length: int | None = None):
+    def __init__(self, indexer: type[Indexer], inner_code: bool = False, *, max_run_length: int | None = None):
         """
         Initializes the CheckSum instance.
 
@@ -210,7 +210,7 @@ class ReedSolomon:
     # Padding base for Reed-Solomon encoding
     RS_PADDING: str = 'A' 
 
-    def __init__(self, parity_bytes: int, indexer: type[Indexer] = Indexer, max_run_length: int | None = None):
+    def __init__(self, parity_bytes: int, indexer: type[Indexer] = Indexer, *, max_run_length: int | None = None):
         """
         Initializes the ReedSolomon instance.
 

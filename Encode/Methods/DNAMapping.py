@@ -76,14 +76,14 @@ class DNAMap(Encoding):
 
     @override
     def encode_segments(self,
-                        binary_string: str, 
+                        data: str, 
                         payload_length: int, 
                         *args, **kwargs) -> tuple[dict[str, str], list[str]]:
         """
         Encodes a binary string into DNA segments of a specified payload length.
 
         Args:
-            binary_string: The binary string to be encoded.
+            data: The raw ascii string to be encoded.
             payload_length: The length of each DNA segment.
             *args and **kwargs are used to keep polymorphism with other encoding methods
 
@@ -99,6 +99,9 @@ class DNAMap(Encoding):
                 message="Payload length must be greater than 0.",
                 payload_length=payload_length
             )
+
+        # Convert data into binary
+        binary_string: str = Encoding.ascii_to_binary(data)
 
         mapping: dict[str, str]
         dna_string: str
@@ -409,7 +412,7 @@ class DNAMapHuffman(DNAMap):
         #   we need to account for the fact that each base represents 2 bits.
         huffman_codes, encoded_data = Huffman().encode_segments(data, payload_length * self.BIT_MULTIPLIER - 1)
         for index, segment in enumerate(encoded_data):
-            segment = segment + DNAMap.FINAL_PADDING_CHAR
+            segment += DNAMap.FINAL_PADDING_CHAR
 
             # Now encode the binary segment to DNA
             dna_segment: str

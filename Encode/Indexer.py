@@ -34,7 +34,7 @@ class Indexer:
 
 
     @staticmethod
-    def determine_optimal_width(num_oligos: int, *args: Any, **kwargs: Any) -> int:
+    def determine_optimal_width(required_capacity: int, *args: Any, **kwargs: Any) -> int:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
