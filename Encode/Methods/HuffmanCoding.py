@@ -735,6 +735,8 @@ class BitScanQuaternary(Quaternary):
 
     @override
     def encode_segments(self, data: str, payload_length: int, *args, **kwargs) -> tuple[dict[str, str], list[str]]:
+        # Data should be in bit form
+        data = Encoding.ascii_to_binary(data)
         return super().encode_segments(data, payload_length, self.K, *args, **kwargs)
 
 
@@ -773,6 +775,31 @@ class BitScanQuaternary(Quaternary):
 
         # Return the table and encoded data as or string of encoded data
         return huffman_codes, encoded_data
+
+
+    @override 
+    def decode_segments(self, encoded_data: list[str], huffman_codes: dict[str, str], *args, **kwargs) -> list[str]:
+        # Get our decoded segments (will be in binary form)
+        decoded_segments: list[str] = super().decode_segments(encoded_data, huffman_codes, *args, **kwargs)
+        
+        ascii_segments: list[str] = []
+        remainder: str = ""
+
+        # For every segment, append the remainder from the last segment and convert to ascii, then save the new 
+        #   remainder for the next segment
+        for segment in decoded_segments:
+            decoded_data: str = remainder + segment
+
+            # Gets the length of the complete bits (multiple of 8)
+            complete_bit_length: int = len(decoded_data) - (len(decoded_data) % 8)
+
+            # Get up to the complete bits and convert to ascii, append to the list of ascii segments
+            ascii_segments.append(Encoding.binary_to_ascii(decoded_data[:complete_bit_length]))
+
+            # Save the remainder for the next segment
+            remainder = decoded_data[complete_bit_length:]
+
+        return ascii_segments
 
 
     def find_optimal_k(self, in_path: str, min_k: int = 4, max_k: int = 52) -> tuple[int, float, dict[str, str], str]:

@@ -101,7 +101,6 @@ class OligoFramer:
         Args:
             overhead_margin: Fractional safety margin applied to the base count (e.g. 0.10).
             width_left: The number of bases available for the index and payload.
-            max_iterations: The maximum number of iterations to attempt to find a suitable index width.
             in_path: The path to the input file.
             encoder: An instance of the Encoding class to use for encoding the file.
             indexer: An instance of the Indexer class to use for determining the index width.

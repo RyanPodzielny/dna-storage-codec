@@ -7,7 +7,7 @@ Uses both standard DNA mapping and Huffman coding for compression.
 """
 
 from typing import Any, Final, override
-from Encode.Helpers.Errors import PayloadLengthError
+from Encode.Helpers.Errors import EncodingError, PayloadLengthError
 from Encode.Methods.Encoding import Encoding
 from Encode.Methods.HuffmanCoding import Huffman
 
@@ -61,7 +61,7 @@ class DNAMap(Encoding):
             The segment with padding added if it was shorter than the payload length.
         """
         if len(segment) < payload_length:
-            # ConveTr padding character to binary and then to DNA, we only need the DNA part
+            # Convert padding character to binary and then to DNA, we only need the DNA part
             padding: str
             _, padding, _ = self.encode(self.ascii_to_binary(DNAMap.CHUNKING_PADDING_CHAR))
 
@@ -72,6 +72,41 @@ class DNAMap(Encoding):
             segment = segment[:payload_length]  # Ensure we don't exceed the payload length
             
         return segment
+
+
+    def _decode_binary_segments(self, encoded_data: list[str]) -> list[str]:
+        """
+        Decodes a list of DNA segments back into binary strings.
+
+        Args:
+            encoded_data: A list of DNA segments to be decoded.
+        
+        Returns:
+            A list of binary strings corresponding to the decoded DNA segments.
+
+        Raises:
+            EncodingError: If any of the DNA segments are empty.
+            KeyError: If the DNA segments contain characters not in the reverse DNA map.
+        """
+        binary_segments: list[str] = []
+
+        # Go through each segment and decode back to binary (decoding each ascii does not work here, need entire string)
+        for segment in encoded_data:
+            if not segment:
+                raise EncodingError(
+                    message="DNA segment cannot be empty.",
+                    encoding_method=self.__class__.__name__,
+                )
+            
+            binary_segment: str = ""
+            # Add the binary representation of each base in the segment to the binary_segment string
+            for base in segment:
+                binary_segment += self.REVERSE_DNA_MAP[base]
+
+            # And append
+            binary_segments.append(binary_segment)
+
+        return binary_segments
 
 
     @override
@@ -91,7 +126,6 @@ class DNAMap(Encoding):
             A tuple containing the mapping used for encoding and a list of DNA segments, each of the specified payload length.
         
         Raises:
-            ValueError: If the binary string is empty or if the payload length is not greater than 0.
             PayloadLengthError: If the payload length is not greater than 0.
         """
         if payload_length <= 0:
@@ -205,33 +239,42 @@ class DNAMap(Encoding):
     @override
     def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
         """
-        Decodes a list of DNA segments back into binary strings.
+        Decodes a list of DNA segments back to a list of ASCII strings.
 
         Args:
             encoded_data: A list of DNA segments to be decoded.
-            *args and **kwargs used to keep polymorphism
-        
+            *args and **kwargs are used to keep polymorphism with other decoding methods.
+
         Returns:
-            A list of binary strings corresponding to the decoded DNA segments.
+            A list of ASCII strings corresponding to the decoded DNA segments.
 
         Raises:
             ValueError: If any of the DNA segments are empty or contain invalid characters.
             KeyError: If the DNA segments contain characters not in the reverse DNA map.
         """
-        binary_segments: list[str] = []
+        # Decode the DNA segments back to binary segments
+        binary_segments: list[str] = self._decode_binary_segments(encoded_data)
 
-        # Go through each segment and decode back to binary (decoding each ascii does not work here, need entire string)
-        for segment in encoded_data:
-            if not segment:
-                raise ValueError("DNA segment cannot be empty.")
-            
-            binary_segment: str = ""
-            for base in segment:
-                binary_segment += self.REVERSE_DNA_MAP[base]
+        ascii_segments: list[str] = []
+        remainder: str = "" 
 
-            binary_segments.append(binary_segment)
+        # For each binary seg, convert back to ascii
+        for segment in binary_segments:
+            # Ensure to add the remainder from the previous segment to the current segment before converting to ascii
+            decoded_data: str = remainder + segment
 
-        return binary_segments
+            # Calculate the complete bit length that can be converted to ascii (must be a multiple of 8)
+            complete_bit_length: int = len(decoded_data) - (len(decoded_data) % 8)
+            ascii_segments.append(Encoding.binary_to_ascii(decoded_data[:complete_bit_length]))
+
+            # Remainder is what is left
+            remainder = decoded_data[complete_bit_length:]
+
+        # Remove any padding from the last segment if it was added during encoding
+        if len(ascii_segments) > 0:
+            ascii_segments[-1] = ascii_segments[-1].rstrip(DNAMap.CHUNKING_PADDING_CHAR)
+
+        return ascii_segments
 
 
     @override
@@ -479,36 +522,43 @@ class DNAMapHuffman(DNAMap):
         huffman_codes: dict[str, str] | None
         binary_string, huffman_codes, has_padding = self.read_json_table(json_path)
 
+        # Convert to binary if requested 
         if as_binary:
             binary_string = Encoding.ascii_to_binary(binary_string)
 
         _, dna_string, has_padding = super().encode(binary_string)
 
+        # Save it 
         self.save_json_table(out_path, dna_string, huffman_codes, has_padding)
 
         return dna_string
 
 
     @override
-    def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
+    def decode_segments(self, encoded_data: list[str], huffman_codes: dict[str, str], *args, **kwargs) -> list[str]:
         """
-        Decodes a list of DNA segments back into binary. DOES NOT RETURN HUFFMAN DECODED, NEEDS TO BE DECODED AFTER.
-        Since we cannot decode by segment, we need to decode the entire string after decoding the segments. Basically, 
-        to decode we combine segements then perform Huffman decoding on the entire string (and remove the padding 0).
+        Decodes a list of DNA segments back to a list of ASCII strings using Huffman coding.
 
         Args:
             encoded_data: A list of DNA segments to be decoded.
             *args and **kwargs used to keep polymorphism
 
         Returns:
-            The decoded binary strings BEFORE Huffman decoding, which can then be decoded using the Huffman codes.
+            A list of ASCII strings corresponding to the decoded DNA segments.
         
         Raises:
             ValueError: If the input data is invalid.
             KeyError: If the input data contains keys that are not expected.
         """
 
-        return super().decode_segments(encoded_data)
+        binary_segments: list[str] = self._decode_binary_segments(encoded_data)
+        ascii_segments: list[str] = []
+
+        for segment in binary_segments:
+            # Each encoded segment has one final bit added to make its DNA length even.
+            ascii_segments.append(Huffman().decode(segment[:-1], huffman_codes))
+
+        return ascii_segments
         
 
     @override
