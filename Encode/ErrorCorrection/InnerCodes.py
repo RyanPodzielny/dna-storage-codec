@@ -1,6 +1,6 @@
 import reedsolo
 from fastcrc import crc16, crc32
-from typing import Callable
+from typing import Any, Callable
 from Encode.Indexer import Indexer
 from Encode.Methods.Encoding import Encoding
 from Encode.Helpers.Errors import InnerCodeError, RankError
@@ -152,9 +152,11 @@ class CheckSum:
             UnrankError: If unable to unrank the checksum integer to a DNA sequence.
         """
         # Convert the checksum integer to a DNA sequence using the indexer
-        dna_sequence: str = self.indexer.unrank(checksum, 
-                                                before=before_sequence, 
-                                                after=after_sequence)
+        dna_sequence: str = self.indexer.unrank(
+            index=checksum, 
+            before_sequence=before_sequence, 
+            after_sequence=after_sequence
+        )
 
         return dna_sequence
 
@@ -176,10 +178,27 @@ class CheckSum:
             RankError: If unable to rank the DNA sequence back to a checksum integer.
         """
         # Convert the DNA sequence back to the checksum integer using the indexer
-        checksum: int = self.indexer.rank(dna_sequence, 
-                                          before=before_sequence, 
-                                          after=after_sequence,
-                                          ignore_run_length=True)
+        checksum: int = self.indexer.rank(
+            index_sequence=dna_sequence, 
+            before_sequence=before_sequence, 
+            after_sequence=after_sequence,
+            ignore_run_length=True
+        )
+
+        # Verify that the checksum can be unranked back to the same DNA sequence - if it can't it means the checksum is
+        #   likely corrupted (for whatever reason) and we should not trust it. 
+        canonical_sequence: str = self.indexer.unrank(
+            index=checksum,
+            before_sequence=before_sequence,
+            after_sequence=after_sequence,
+            ignore_run_length=True
+        )
+        if canonical_sequence != dna_sequence:
+            raise RankError(
+                message="Could not rank checksum sequence",
+                index_sequence=dna_sequence,
+                width=self.indexer.width
+            )
 
         return checksum
 
@@ -298,17 +317,25 @@ class ReedSolomon:
         parity_bytes: list[int] = self._encode(encoded_data)
         dna_sequence: str = ""
 
+        # Unrank each parity byte individually to a DNA sequence using the indexer
         for byte in parity_bytes:
-            dna_sequence += self.indexer.unrank(byte, 
-                                                before=before_sequence, 
-                                                after=after_sequence)
-            # Update the before_sequence for the next byte
+            dna_sequence += self.indexer.unrank(
+                index=byte, 
+                before_sequence=before_sequence,
+                after_sequence=after_sequence
+            )
+
+            # Update the before_sequence for the next parity byte to be encoded
             before_sequence = dna_sequence 
 
         return dna_sequence
 
 
-    def _decode(self, encoded_data: str, parity_bytes: bytearray, sequence_length: int, erasures: list[int]) -> str:
+    def _decode(self, 
+                encoded_data: str, 
+                parity_bytes: bytearray, 
+                sequence_length: int, 
+                erasures: list[int]) -> tuple[str, bytearray]:
         """
         Decodes the given data using Reed-Solomon error correction.
 
@@ -319,7 +346,7 @@ class ReedSolomon:
             erasures: The positions of the erasures in the parity sequence, i.e. known to be incorrect.
 
         Returns:
-            The decoded data without the parity bytes (index + payload + checksum).
+            A tuple containing the decoded data without parity and the corrected parity bytes.
 
         Raises:
             ReedSolomonError: If the data cannot be corrected.
@@ -334,38 +361,37 @@ class ReedSolomon:
         # Add rest of the parity bytes
         byte_stream += parity_bytes
 
-        # Get only the decoded bytes, discard everything else
-        decoded_bytes: bytearray = bytearray(self.RSCodec.decode(byte_stream, erase_pos=erase_positions)[1])
+        # Keep the corrected full codeword so corrected parity is available and seperate them
+        corrected_codeword: bytearray = bytearray(self.RSCodec.decode(byte_stream, erase_pos=erase_positions)[1])
+        corrected_data = corrected_codeword[:stream_length]
+        corrected_parity = corrected_codeword[stream_length:]
 
         # Convert the decoded bytes back to a DNA sequence
-        bit_stream: str = "".join(f"{byte:08b}" for byte in decoded_bytes)
+        bit_stream: str = "".join(f"{byte:08b}" for byte in corrected_data)
         decoded_sequence: str = ""
         for index in range(0, len(bit_stream), 2):
             bits: str = bit_stream[index:index+2]
             decoded_sequence += Encoding.DNA_MAP[bits]
-
-        # If the decoded sequence is longer than the original sequence length, truncate it - means padding showing
-        if len(decoded_sequence) > sequence_length:
-            decoded_sequence = decoded_sequence[:sequence_length]
-
-        return decoded_sequence
+    
+        # Return only the original sequence length, discard any padding and parity bytes corrected
+        return decoded_sequence[:sequence_length], corrected_parity
 
 
     def decode_from_dna(self, 
                         encodeded_data: str, 
                         parity_dna_sequence: str, 
-                        before_sequence: str, after_sequence: str) -> str:
+                        before_sequence: str, after_sequence: str) -> tuple[str, str]:
         """
-        Converts a DNA sequence back to the corresponding Reed-Solomon parity bytes integer.
+        Attempts to decode the given DNA sequence using Reed-Solomon error correction.
 
         Args:
-            encodeded_data: The DNA sequence to be converted back to Reed-Solomon parity bytes.
+            encodeded_data: The DNA sequence without the RS parity bytes, i.e. [index | payload | checksum] sequence.
             parity_dna_sequence: The DNA sequence representing the Reed-Solomon parity bytes.
             before_sequence: The sequence before the parity bytes in the oligo.
             after_sequence: The sequence after the parity bytes in the oligo.
 
         Returns:
-            The corresponding Reed-Solomon parity bytes integer.
+            A tuple containing the corrected data DNA and corrected RS parity DNA.
 
         Raises:
             RankError: If unable to rank the DNA sequence back to a Reed-Solomon parity bytes integer.
@@ -385,10 +411,14 @@ class ReedSolomon:
             current_sequence: str = parity_dna_sequence[start:end]
 
             try:
-                parity_byte: int = self.indexer.rank(current_sequence, 
-                                                     before=before_sequence, 
-                                                     after=after_sequence,
-                                                     ignore_run_length=True)
+                # Rank the current DNA sequence to get the corresponding parity byte
+                parity_byte: int = self.indexer.rank(
+                    index_sequence=current_sequence, 
+                    before_sequence=before_sequence, 
+                    after_sequence=after_sequence,
+                    ignore_run_length=True
+                )
+                
                 # Can't decode, treat as an erasure
                 if not (0 <= parity_byte < 256):
                     parity_byte = 0
@@ -397,16 +427,36 @@ class ReedSolomon:
             except RankError as _:
                 parity_byte: int = 0
                 erasures.append(index)
-
         
             # Update new start sequence for the next parity byte to be decoded
             before_sequence = current_sequence
 
             parity_bytes.append(parity_byte)
 
-        decoded_sequence: str = self._decode(encodeded_data, parity_bytes, len(encodeded_data), erasures)
+        # Decode the data using the Reed-Solomon decoder
+        decoded_sequence, corrected_parity_bytes = self._decode(
+            encoded_data=encodeded_data,
+            parity_bytes=parity_bytes, 
+            sequence_length=len(encodeded_data),
+            erasures=erasures
+        )
 
-        return decoded_sequence
+        # Use the corrected checksum as the context for the corrected parity DNA
+        corrected_before: str = decoded_sequence[-len(before_sequence):] if before_sequence else ""
+        corrected_parity_dna: str = ""
+
+        # Unrank the corrected parity bytes back to DNA sequences
+        for byte in corrected_parity_bytes:
+            parity_sequence = self.indexer.unrank(
+                index=byte,
+                before_sequence=corrected_before,
+                after_sequence=after_sequence
+            )
+            corrected_parity_dna += parity_sequence
+            corrected_before = corrected_parity_dna
+
+        # Return the decoded sequence and the corrected parity DNA sequence
+        return decoded_sequence, corrected_parity_dna
 
 
     def get_dna_bases(self) -> int:

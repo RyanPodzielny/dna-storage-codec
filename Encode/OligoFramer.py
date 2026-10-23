@@ -1,7 +1,7 @@
 import math
 from functools import lru_cache
 from reedsolo import ReedSolomonError
-from typing import Any
+from typing import Any, Generator
 from pathlib import Path
 from Encode.Helpers.Errors import Error, ExpectedLengthError, PayloadLengthError, RankError
 from Encode.Methods.Encoding import Encoding
@@ -169,7 +169,7 @@ class OligoFramer:
             rs_parity_sequence: str = self.inner_error_correction.encode_to_dna(
                 protected_sequence,
                 before_sequence=checksum_sequence,
-                after_sequence=self.end_primer
+                after_sequence=self.end_primer,
             )
 
         # Add primers if requested
@@ -206,9 +206,9 @@ class OligoFramer:
         indices: list[str] = []
         for index in range(self.num_oligos):
             index_sequence: str = self.indexer.unrank(
-                index, 
-                before=self.start_primer[-1], 
-                after=Huffman.START_BASE
+                index=index, 
+                before_sequence=self.start_primer[-1], 
+                after_sequence=Huffman.START_BASE
             )
             indices.append(index_sequence)
 
@@ -229,12 +229,13 @@ class OligoFramer:
         return framed_oligos
 
 
-    def unframe_oligo(self, framed_oligo: str, expected_length: int) -> tuple[str, str, str, str]:
+    def unframe_oligo(self, framed_oligo: str, expected_length: int, include_primers: bool = True) -> tuple[str, str, str, str]:
         """
         Unframes a single oligo, extracting the index and payload sequences.
 
         Args:
             framed_oligo: The fully framed oligo as a string.
+            expected_length: The expected length of the framed oligo.
         
         Returns:
             A tuple containing the index sequence, payload sequence, checksum sequence, and RS parity sequence.
@@ -242,17 +243,22 @@ class OligoFramer:
         Raises:
             ExpectedLengthError: If the length of the framed oligo does not match the expected length
         """
+        # Calculate the lengths of the various components
+        start_primer_length: int = len(self.start_primer)
+        end_primer_length: int = len(self.end_primer)
+        if not include_primers:
+            expected_length -= len(self.start_primer) + len(self.end_primer)
+            start_primer_length = 0
+            end_primer_length = 0
+        checksum_length: int = self.checksum.get_dna_bases()
+        rs_parity_length: int = self.inner_error_correction.get_dna_bases() if self.inner_error_correction else 0
+
+        # Ensure the framed oligo is of the expected length
         if len(framed_oligo) != expected_length:
             raise ExpectedLengthError(
                 sequence=framed_oligo,
                 expected_length=expected_length
             )
-
-        # Calculate the lengths of the various components
-        start_primer_length: int = len(self.start_primer)
-        end_primer_length: int = len(self.end_primer)
-        checksum_length: int = self.checksum.get_dna_bases()
-        rs_parity_length: int = self.inner_error_correction.get_dna_bases() if self.inner_error_correction else 0
 
         # Extract the index sequence
         index_sequence: str = framed_oligo[start_primer_length:start_primer_length + self.indexer.width]
@@ -268,16 +274,16 @@ class OligoFramer:
         checksum_sequence: str = framed_oligo[checksum_start:checksum_end]
 
         # Extract the RS parity sequence if inner error correction is enabled
-        rs_parity_sequence: str = ""
+        rs_sequence: str = ""
         if self.inner_error_correction:
             rs_parity_start: int = checksum_end
             rs_parity_end: int = rs_parity_start + rs_parity_length
-            rs_parity_sequence: str = framed_oligo[rs_parity_start:rs_parity_end]
+            rs_sequence: str = framed_oligo[rs_parity_start:rs_parity_end]
 
-        return index_sequence, payload_sequence, checksum_sequence, rs_parity_sequence
+        return index_sequence, payload_sequence, checksum_sequence, rs_sequence
 
 
-    def unframe_all_oligos(self, framed_oligos: list[str]) -> list[tuple[str, str, str, str]]:
+    def unframe_all_oligos(self, framed_oligos: list[str]) -> Generator[tuple[str, str, str, str]]:
         """
         Unframes all oligos, extracting the index and payload sequences for each.
 
@@ -292,18 +298,106 @@ class OligoFramer:
             ExpectedLengthError: If the length of any framed oligo does not match the expected length.
         """
         expected_length: int = self.oligo_length
-        unframed_oligos: list[tuple[str, str, str, str]] = []
+
+        # Go through each framed oligo and unframe it, yielding the results
         for framed_oligo in framed_oligos:
             # TODO: UnpectedLengthError will occur on indel, we will eventually want to try to rebuild it with the inner
             #   code, but will mark for erasure if can't
-            unframed_oligo: tuple[str, str, str, str] = self.unframe_oligo(framed_oligo, expected_length)
-            unframed_oligos.append(unframed_oligo)
+            yield self.unframe_oligo(framed_oligo, expected_length)
 
-        return unframed_oligos
 
-    """
-    Decodes all framed oligos back into the original file content.
-    """
+    def _checksum_is_valid(self, index_sequence: str, payload_sequence: str, checksum_sequence: str) -> bool:
+        """
+        Checks whether an oligo's checksum matches its index and payload.
+
+        Args:
+            index_sequence: The index sequence for the oligo.
+            payload_sequence: The payload sequence for the oligo.
+            checksum_sequence: The checksum sequence for the oligo.
+
+        Returns:
+            True if the checksum is valid, False otherwise.
+        """
+        try:
+            # Decode the checksum from the DNA sequence and verify it against the index and payload
+            checksum: int = self.checksum.decode_from_dna(
+                dna_sequence=checksum_sequence,
+                before_sequence=payload_sequence,
+                after_sequence=self.end_primer
+            )
+            return self.checksum.verify_checksum(
+                data=index_sequence + payload_sequence,
+                checksum=checksum
+            )
+        # Any custom error means we fail the checksum 
+        except Error:
+            return False
+
+
+    def _correct_oligo(self, 
+                       index_sequence: str,
+                       payload_sequence: str,
+                       checksum_sequence: str, 
+                       rs_sequence: str) -> str | None:
+        """
+        Corrects an oligo with RS and returns its data plus corrected parity.
+        
+        Args:
+            index_sequence: The index sequence for the oligo.
+            payload_sequence: The payload sequence for the oligo.
+            checksum_sequence: The checksum sequence for the oligo.
+            rs_sequence: The RS parity sequence for the oligo.
+
+        Returns:
+            The corrected oligo as a string, or None if correction is not possible.
+
+        Raises:
+            RankError: If the index sequence is not in bounds of capacity.
+            ReedSolomonError: If the Reed-Solomon correction fails.
+            KeyError: If the indexer fails to unrank the corrected parity bytes back to DNA sequences.
+            ExpectedLengthError: If the length of the corrected oligo does not match the expected length.
+        """
+        if not self.inner_error_correction:
+            return None
+
+        # Correct the oligo using RS codes
+        encoded_data: str = index_sequence + payload_sequence + checksum_sequence
+        corrected_data, corrected_parity = self.inner_error_correction.decode_from_dna(
+            encodeded_data=encoded_data,
+            parity_dna_sequence=rs_sequence,
+            before_sequence=checksum_sequence,
+            after_sequence=self.end_primer
+        )
+
+        # Unframe the corrected oligo to get the corrected index, payload, and checksum sequences
+        corrected_index, corrected_payload, corrected_checksum, corrected_parity = self.unframe_oligo(
+            framed_oligo=corrected_data + corrected_parity,
+            expected_length=self.oligo_length,
+            include_primers=False
+        )
+
+        # Verify the corrected checksum
+        if not self._checksum_is_valid(corrected_index, corrected_payload, corrected_checksum):
+            return None
+
+        # Return the corrected data plus the corrected parity
+        return corrected_data + corrected_parity
+
+
+    def _add_primers(self, oligo: str) -> str:
+        """
+        Adds the configured primers to an oligo.
+
+        Args:
+            oligo: The oligo sequence to which primers should be added.
+
+        Returns:
+            The oligo sequence with primers added.
+        """
+
+        return self.start_primer + oligo + self.end_primer
+
+
     def decode_all_oligos(self, framed_oligos: list[str]) -> list[str | None]:
         """
         Decodes all framed oligos back into the original file content.
@@ -318,16 +412,58 @@ class OligoFramer:
             ExpectedLengthError: If the length of any framed oligo does not match the expected length.
             UnrankError: If the index sequence is not in bounds of capacity.
         """
-        # Retrieve all our parts in lock step
-        items: list[tuple[str, str, str, str]] = self.unframe_all_oligos(framed_oligos)
-        index_sequences: list[str] = []
-        payload_sequences: list[str] = []
-        checksum_sequences: list[str] = []
-        rs_parity_sequences: list[str] = []
-        for index_sequence, payload_sequence, checksum_sequence, rs_parity_sequence in items:
-            index_sequences.append(index_sequence)
-            payload_sequences.append(payload_sequence)
-            checksum_sequences.append(checksum_sequence)
-            rs_parity_sequences.append(rs_parity_sequence)
+        decoded_segments: list[str | None] = []
 
-        return []
+        # For all our unframed oligos, check if the checksum is valid, if not, try to correct it with RS codes
+        for index_sequence, payload_sequence, checksum_sequence, rs_sequence in self.unframe_all_oligos(framed_oligos):
+            # Oligo without the primers
+            oligo: str = index_sequence + payload_sequence + checksum_sequence + rs_sequence
+
+            # Check if we can validate the checksum, if so, we can just add the primers and move on
+            if self._checksum_is_valid(index_sequence, payload_sequence, checksum_sequence):
+                # Use our error correction to fix the parity bits (really unncessary but whatever)
+                if self.inner_error_correction:
+                    rs_sequence = self.inner_error_correction.encode_to_dna(
+                        encoded_data=index_sequence + payload_sequence + checksum_sequence,
+                        before_sequence=checksum_sequence,
+                        after_sequence=self.end_primer
+                    )
+                    oligo = index_sequence + payload_sequence + checksum_sequence + rs_sequence
+
+                # Append with primers
+                decoded_segments.append(self._add_primers(oligo))
+
+                continue
+            
+            if self.inner_error_correction:
+                try:
+                    corrected_oligo = self._correct_oligo(
+                        index_sequence=index_sequence,
+                        payload_sequence=payload_sequence, 
+                        checksum_sequence=checksum_sequence, 
+                        rs_sequence=rs_sequence
+                    )
+
+                    # Append the corrected oligo with primers if correction was successful, otherwise append None
+                    if corrected_oligo:
+                        decoded_segments.append(self._add_primers(corrected_oligo))
+                    else:
+                        decoded_segments.append(None)
+                
+                # Any custom error means we fail the checksum and can't correct it
+                except Error:
+                    print(f"Custom error occurred for oligo Error")
+                    decoded_segments.append(None)
+
+                # Reed-Solomon correction failed, mark as erasure
+                except ReedSolomonError as error:
+                    print(f"Reed-Solomon correction failed for oligo: {oligo}. Error: {error}")
+                    decoded_segments.append(None)
+
+                # Move on
+                continue
+
+            # If we can't correct it, mark as erasure
+            decoded_segments.append(None)
+
+        return decoded_segments

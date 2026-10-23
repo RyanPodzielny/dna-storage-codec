@@ -333,14 +333,15 @@ class GoldmanIndexer(Indexer):
 
 
     @override
-    def rank(self, index_sequence: str, *, before_sequence: str, args: Any, **kwargs: Any) -> int:
+    def rank(self, index_sequence: str, before_sequence: str, *args: Any, **kwargs: Any) -> int:
         """
         Calculates the rank of a given index sequence based on the Goldman indexing scheme.
 
         Args:
             index_sequence: The index sequence to calculate the rank for.
             before_sequence: The before sequence used in the oligo.
-            _after: Unused, included for polymorphism.
+            after_sequence: The after sequence used in the oligo.
+            *args and **kwargs are included for polymorphism, but unused
 
         Returns:
             The rank of the index sequence.
@@ -373,6 +374,9 @@ class EnumerativeIndexer(Indexer):
     ORDERED_ALPHABET: Final[tuple[str, ...]] = ('A', 'C', 'G', 'T')
     VALID_NUM: Final[int] = len(ORDERED_ALPHABET)
 
+    # Arbitrary limit to prevent infinite loops in determine_optimal_width
+    REASONABLE_WIDTH_LIMIT: Final[int] = 50  
+
 
     def __init__(self, width: int, max_run_length: int = 1):
         """
@@ -386,8 +390,8 @@ class EnumerativeIndexer(Indexer):
         recommended solution is to encode the after first as it is the main purpose of the encoding, then use the 
         indexer.
         """
-        self.max_run_length: int = max_run_length
         super().__init__(width)
+        self.max_run_length: int = max_run_length
 
 
     def _run_length(self, sequence: str, reverse: bool) -> int:
@@ -401,7 +405,8 @@ class EnumerativeIndexer(Indexer):
         Returns:
             The homopolymer run length of the sequence.
         """
-        run_length: int = 0
+        
+        run_length: int = 1
 
         # Reversing the sequence takes a bunch of time espiecally if we have a lot of oligos, so we just iterate 
         #   backwards instead of reversing the string
@@ -423,13 +428,13 @@ class EnumerativeIndexer(Indexer):
 
         return run_length
 
-    def _sequence_gaurd(self, before: str, after: str, ignore_run_length: bool = False) -> tuple[int, int]:
+    def _sequence_gaurd(self, before_sequence: str, after_sequence: str, ignore_run_length: bool = False) -> tuple[int, int]:
         """
         Validates the before and after sequences to ensure they are not empty and do not exceed the maximum run length.
 
         Args:
-            before: The before sequence used in the oligo.
-            after: The after sequence used in the oligo.
+            before_sequence: The before sequence used in the oligo.
+            after_sequence: The after sequence used in the oligo.
             ignore_run_length: A boolean indicating whether to ignore the maximum run length check.
 
         Returns:
@@ -438,18 +443,20 @@ class EnumerativeIndexer(Indexer):
         Raises:
             ExeceedsMaxRunLengthError: If the before or after sequences are above the maximum run length
         """
-        if ignore_run_length:
-            return 0, 0
+        before_run: int = self._run_length(before_sequence, reverse=True)
+        after_run: int = self._run_length(after_sequence, reverse=False)
 
-        before_run: int = self._run_length(before, reverse=True)
-        after_run: int = self._run_length(after, reverse=False)
+        # If we're ignoring the run length, we'll cap the run lengths at the maximum run length
+        if ignore_run_length and self.max_run_length >= 0:
+            before_run = min(before_run, self.max_run_length)
+            after_run = min(after_run, self.max_run_length)
 
         # Check if the before or after exceeds the maximum run length, which would make it impossible to generate 
         #   valid index sequences with the max run length constraint.
         if not ignore_run_length and (before_run > self.max_run_length or after_run > self.max_run_length):
             raise MaxRunLengthError(
                 message="Before or after sequences exceed the maximum run length",
-                sequence=f"{before} {after}",
+                sequence=f"{before_sequence} {after_sequence}",
                 max_run_length=self.max_run_length
             )
 
@@ -581,20 +588,20 @@ class EnumerativeIndexer(Indexer):
             indexer.width = width
 
             # Prevent infinite loop
-            if width > 50:  
+            if width > EnumerativeIndexer.REASONABLE_WIDTH_LIMIT:  
                 raise RuntimeError("Unable to determine optimal width within reasonable bounds.")
 
 
 
-    def rank(self, index_sequence: str, *, before: str, after: str, ignore_run_length: bool = False) -> int:
+    def rank(self, index_sequence: str, *, before_sequence: str, after_sequence: str, ignore_run_length: bool = False) -> int:
         """
         Calculates the rank of a given index sequence based on the enumerative indexing scheme. Basically gives the
         index based on the sequence.
 
         Args:
             index_sequence: The index sequence to calculate the rank for.
-            before: The before sequence used in the oligo.
-            after: The sequence after the data in the oligo.
+            before_sequence: The before sequence used in the oligo.
+            after_sequence: The sequence after the data in the oligo.
         
         Returns:
             The rank of the index sequence.
@@ -606,6 +613,7 @@ class EnumerativeIndexer(Indexer):
         if self.width <= 0:
             raise ValueError("Width must be a positive integer.")
 
+        # Check if the index sequence length matches the expected width
         if len(index_sequence) != self.width:
             raise RankError(
                 message="Could not rank index sequence",      
@@ -613,13 +621,14 @@ class EnumerativeIndexer(Indexer):
                 width=self.width
             )
 
+        # Gaurd to ensure that the before and after sequences do not exceed the maximum run lengths
         before_run: int 
         after_run: int
-        before_run, after_run = self._sequence_gaurd(before, after, ignore_run_length=ignore_run_length)
+        before_run, after_run = self._sequence_gaurd(before_sequence, after_sequence, ignore_run_length)
 
         # Ensure we always have a previous start or end base (if no primers this can happen)
-        previous_base: str = before[-1] if before else Huffman.START_BASE
-        ending_base: str = after[0] if after else Huffman.START_BASE
+        previous_base: str = before_sequence[-1] if len(before_sequence) > 0 else Huffman.START_BASE
+        ending_base: str = after_sequence[0] if len(after_sequence) > 0 else Huffman.START_BASE
     
         index_run: int = before_run
         new_run: int = 0
@@ -672,7 +681,7 @@ class EnumerativeIndexer(Indexer):
                 )
 
         # Check the boundary between index and after.
-        if not ignore_run_length and index_run + after_run > self.max_run_length:
+        if (not ignore_run_length and previous_base == ending_base and index_run + after_run > self.max_run_length):
             raise MaxRunLengthError(
                 message="Index sequence and after exceed the maximum run length.",
                 sequence=index_sequence,
@@ -682,14 +691,14 @@ class EnumerativeIndexer(Indexer):
         return rank
         
 
-    def unrank(self, index: int, *, before: str, after: str, ignore_run_length: bool = False) -> str:
+    def unrank(self, index: int, *, before_sequence: str, after_sequence: str, ignore_run_length: bool = False) -> str:
         """
         Generates the index sequence corresponding to a given rank based on the enumerative indexing scheme.
 
         Args:
             index: The rank of the index sequence to generate.
-            before: The before sequence used in the oligo.
-            after: The after sequence used in the oligo.
+            before_sequence: The before sequence used in the oligo.
+            after_sequence: The after sequence used in the oligo.
 
         Returns:
             The index sequence corresponding to the given rank.
@@ -705,9 +714,9 @@ class EnumerativeIndexer(Indexer):
 
         before_run: int
         after_run: int 
-        before_run, after_run = self._sequence_gaurd(before, after, ignore_run_length=ignore_run_length)
-        previous_base: str = before[-1]
-        ending_base: str = after[0]
+        before_run, after_run = self._sequence_gaurd(before_sequence, after_sequence, ignore_run_length)
+        previous_base: str = before_sequence[-1] if len(before_sequence) > 0 else Huffman.START_BASE
+        ending_base: str = after_sequence[0] if len(after_sequence) > 0 else Huffman.START_BASE
 
         index_run: int = before_run
         new_run: int = 0
