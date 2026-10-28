@@ -123,47 +123,47 @@ class Encoding:
 
     @abstractmethod
     def _add_padding(self, data: str, payload_length: int) -> str:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
     
 
     @abstractmethod
     def encode_segments(self, data: str, payload_length: int, *args, **kwargs) -> tuple[dict[str, str], list[str], Any]:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
     
 
     @abstractmethod
     def encode(self, data: str) -> tuple[dict[str, str], str]:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @abstractmethod
     def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @abstractmethod
     def decode_segments(self, data: list[str], *args, **kwargs) -> str:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @abstractmethod
     def decode(self, data: str, *args, **kwargs) -> str:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @abstractmethod
     def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @abstractmethod
     def estimate_bases_per_byte(self) -> float:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @abstractmethod
     def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @staticmethod
@@ -201,26 +201,39 @@ class Encoding:
         return "".join(format(ord(char), '08b') for char in ascii_string)
 
 
-    def count_runs(self, data: str, k: int = 4) -> int:
+
+    def count_runs(self, data: str, k: int = 4) -> tuple[int, list[tuple[int, int]]]:
         """
         Counts the number of runs of DNA bases in a given string that are at least of length k.
 
         Args:
             data: The string containing DNA bases.
-            k: The minimum length of a run to be counted. Default is 3.
+            k: The minimum length of a run to be counted. Default is 4.
 
         Returns:
-            The number of runs of DNA bases in the string that are at least of length k.
+            The number of runs of DNA bases in the string that are at least of length k. And where they occur in the
+                string, as a list of tuples of (start_index, end_index) for each run. If no runs are found, r
+                returns an empty list.
+
+        Raises:
+            ValueError: If k is less than 1.
         """
+        if k < 1:
+            raise ValueError("k must be at least 1")
+
+        if not data:
+            return 0, []
+
         count: int = 0
         current_run_length: int = 1
         current_run_char: str = data[0]
+        indices: list[tuple[int, int]] = []
 
         # Iterate through the string and count runs
-        for letter in data[1:]:
+        for index, letter in enumerate(data[1:]):
             # If we are not dealing with a DNA base, don't bother counting
             if letter not in self.DNA_BASES:
-                return 0
+                return -1, []
             
             # If the current letter is the same as the last, increment the run length
             if letter == current_run_char:
@@ -229,14 +242,17 @@ class Encoding:
             else:
                 if current_run_length >= k:
                     count += 1
+                    # Append the last index of where the run
+                    indices.append((index - current_run_length + 1, index))
                 current_run_char = letter
                 current_run_length = 1
 
         # Check the last run
         if current_run_length >= k:
             count += 1
+            indices.append((len(data) - current_run_length + 1, len(data)))
 
-        return count
+        return count, indices
 
 
     def print_info(self, json_path: str, original_size: int, k: int = 3) -> None:
@@ -281,7 +297,7 @@ class Encoding:
             return
 
         bases: str = encoded_data
-        runs: int = self.count_runs(bases, k)
+        runs: int = self.count_runs(bases, k)[0]
         GC_content: float = (bases.count('G') + bases.count('C')) / len(bases) * 100
         
         print(f"\tNumber of runs of length >= {k}: {runs}")

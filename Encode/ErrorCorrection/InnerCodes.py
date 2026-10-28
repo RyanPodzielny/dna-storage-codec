@@ -1,19 +1,33 @@
-import reedsolo
+# Not using galois here as it is much slower - we are using standard GF(256) for inners
+import reedsolo 
 from fastcrc import crc16, crc32
-from typing import Any, Callable
+from typing import Callable
 from Encode.Indexer import Indexer
 from Encode.Methods.Encoding import Encoding
 from Encode.Helpers.Errors import InnerCodeError, RankError
 
 
-class CheckSum:
+class InnerCodes():
+    def __init__(self, indexer: type[Indexer], *args, **kwargs):
+        self.indexer = indexer
+
+        
+    def encode_to_dna(self, before_sequence: str, after_sequence: str, *args, **kwargs) -> tuple[str, str]:
+        raise NotImplementedError()
+
+
+    def decode_from_dna(self, encoded_data: str, before_sequence: str, after_sequence: str, *args, **kwargs) -> tuple[str, str]:
+        raise NotImplementedError()
+
+
+class CheckSum(InnerCodes):
     """
     A class for calculating and verifying checksums. Uses Cyclic Redundancy Check (CRC) for error detection. In our
     specific case we will use CRC-32 on each oligio, if we have an inner ECC code, e.g. RS, we will use CRC-16 to save
     space as the inner code will already provide some error correction.
     """
 
-    def __init__(self, indexer: type[Indexer], inner_code: bool = False, *, max_run_length: int | None = None):
+    def __init__(self, indexer: type[Indexer], *, inner_code: bool = False, max_run_length: int | None = None):
         """
         Initializes the CheckSum instance.
 
@@ -63,7 +77,8 @@ class CheckSum:
         return self.width
 
 
-    def calculate_checksum(self, data: str) -> int:
+
+    def calculate_checksum(self, encoded_data: str) -> int:
         """
         Calculates the checksum for the given data.
 
@@ -76,21 +91,21 @@ class CheckSum:
         Raises:
             ValueError: If the data is empty or None.
         """
-        if not data:
+        if not encoded_data:
             raise ValueError("Data for checksum calculation cannot be empty or None.")
 
         # Convert data into bytes
-        byte_stream: bytes = bytes(data, 'utf-8')
+        byte_stream: bytes = bytes(encoded_data, 'utf-8')
 
         return self.crc_func(byte_stream)
 
 
-    def create_checksum_segments(self, unencoded_data: list[str]) -> list[int]:
+    def create_checksum_segments(self, encoded_data: list[str]) -> list[int]:
         """
         Calculates the checksum for each string in the provided list.
 
         Args:
-            unencoded_data: A list of strings for which checksums will be calculated - not DNA bases.
+            encoded_data: A list of strings for which checksums will be calculated - these are DNA sequences.
 
         Returns:
             list[int]: A new list of integers with checksums appended.
@@ -100,7 +115,7 @@ class CheckSum:
         """
         checksums: list[int] = []
 
-        for item in unencoded_data:
+        for item in encoded_data:
             if not item:
                 raise ValueError("Data for checksum calculation cannot be empty or None.")
 
@@ -110,12 +125,12 @@ class CheckSum:
         return checksums
 
 
-    def verify_checksum(self, data: str, checksum: int) -> bool:
+    def verify_checksum(self, encoded_data: str, checksum: int) -> bool:
         """
         Verifies the checksum of the provided data.
 
         Args:
-            data: The data string with the appended checksum.
+            encoded_data: The data string with the appended checksum.
             checksum: The checksum to verify against.
 
         Returns:
@@ -124,26 +139,24 @@ class CheckSum:
         Raises:
             ValueError: If the data is empty or None.
         """
-        if not data:
+        if not encoded_data:
             raise ValueError("Data for checksum verification cannot be empty or None.")
 
         # Calculate the checksum for the original data
-        calculated_checksum: int = self.calculate_checksum(data)
+        calculated_checksum: int = self.calculate_checksum(encoded_data)
 
         # Compare the calculated checksum with the provided checksum
         return calculated_checksum == checksum
 
 
-
-    def encode_to_dna(self, checksum: int, before_sequence: str, after_sequence: str) -> str:
+    def encode_to_dna(self, before_sequence: str, after_sequence: str, *, checksum: int) -> str:
         """
         Converts the checksum integer to a DNA sequence.
 
         Args:
-            checksum: The checksum integer to be converted.
             before_sequence: The sequence before the checksum in the oligo.
             after_sequence: The sequence after the checksum in the oligo.
-            indexer: The indexer to use for the conversion.
+            checksum: The checksum integer to be converted.
 
         Returns:
             str: The corresponding DNA sequence.
@@ -161,15 +174,15 @@ class CheckSum:
         return dna_sequence
 
 
-    def decode_from_dna(self, dna_sequence: str, before_sequence: str, after_sequence: str) -> int:
+    def decode_from_dna(self, encoded_data: str, before_sequence: str, after_sequence: str, *args, **kwargs) -> int:
         """
         Converts a DNA sequence back to the corresponding checksum integer.
 
         Args:
-            dna_sequence: The DNA sequence to be converted.
+            encoded_data: The DNA sequence to be converted.
             before_sequence: The sequence before the checksum in the oligo.
             after_sequence: The sequence after the checksum in the oligo.
-            indexer: The indexer to use for the conversion.
+            *args and **kwargs there to maintain polymorphisms - unused
 
         Returns:
             int: The corresponding checksum integer.
@@ -179,7 +192,7 @@ class CheckSum:
         """
         # Convert the DNA sequence back to the checksum integer using the indexer
         checksum: int = self.indexer.rank(
-            index_sequence=dna_sequence, 
+            index_sequence=encoded_data, 
             before_sequence=before_sequence, 
             after_sequence=after_sequence,
             ignore_run_length=True
@@ -193,24 +206,24 @@ class CheckSum:
             after_sequence=after_sequence,
             ignore_run_length=True
         )
-        if canonical_sequence != dna_sequence:
+        if canonical_sequence != encoded_data:
             raise RankError(
                 message="Could not rank checksum sequence",
-                index_sequence=dna_sequence,
+                index_sequence=encoded_data,
                 width=self.indexer.width
             )
 
         return checksum
 
 
-class ReedSolomon:
+class RSInner(InnerCodes):
     """
     Reed-Solomon error correction for DNA strands.
     """
     # Padding base for Reed-Solomon encoding
     RS_PADDING: str = 'A' 
 
-    def __init__(self, parity_bytes: int, indexer: type[Indexer] = Indexer, *, max_run_length: int | None = None):
+    def __init__(self, indexer: type[Indexer], *, parity_bytes: int, max_run_length: int | None = None):
         """
         Initializes the ReedSolomon instance.
 
@@ -229,7 +242,7 @@ class ReedSolomon:
             raise ValueError("parity_bytes must be between 2 and 16.")
 
         self.parity_bytes: int = parity_bytes
-        self.RSCodec: reedsolo.RSCodec = reedsolo.RSCodec(parity_bytes)
+        self.RS: reedsolo.RSCodec = reedsolo.RSCodec(parity_bytes)
 
         # Going to encode each base as the byte we have - so maxium of 256 numbers per byte
         self.indexer: Indexer = indexer(
@@ -296,17 +309,17 @@ class ReedSolomon:
         byte_stream: bytearray = self._to_bytes(encoded_data)
 
         # Return only the parity bytes
-        return list(self.RSCodec.encode(byte_stream)[-self.parity_bytes:])
+        return list(self.RS.encode(byte_stream)[-self.parity_bytes:])
 
 
-    def encode_to_dna(self, encoded_data: str, before_sequence: str, after_sequence: str) -> str:
+    def encode_to_dna(self, before_sequence: str, after_sequence: str, *, encoded_data: str,) -> str:
         """
         Converts the Reed-Solomon parity bytes integer to a DNA sequence.
 
         Args:
-            encoded_data: The data to be encoded with parity. We assume its the [index | payload | checksum] sequence.
             before_sequence: The sequence before the parity bytes in the oligo.
             after_sequence: The sequence after the parity bytes in the oligo.
+            encoded_data: The data to be encoded with parity. We assume its the [index | payload | checksum] sequence.
     
         Returns:
             The corresponding DNA sequence to the Reed-Solomon parity bytes.
@@ -362,7 +375,7 @@ class ReedSolomon:
         byte_stream += parity_bytes
 
         # Keep the corrected full codeword so corrected parity is available and seperate them
-        corrected_codeword: bytearray = bytearray(self.RSCodec.decode(byte_stream, erase_pos=erase_positions)[1])
+        corrected_codeword: bytearray = bytearray(self.RS.decode(byte_stream, erase_pos=erase_positions)[1])
         corrected_data = corrected_codeword[:stream_length]
         corrected_parity = corrected_codeword[stream_length:]
 
@@ -378,17 +391,19 @@ class ReedSolomon:
 
 
     def decode_from_dna(self, 
-                        encodeded_data: str, 
-                        parity_dna_sequence: str, 
-                        before_sequence: str, after_sequence: str) -> tuple[str, str]:
+                        encoded_data: str, 
+                        before_sequence: str, 
+                        after_sequence: str,
+                        *,
+                        parity_dna_sequence: str, ) -> tuple[str, str]:
         """
         Attempts to decode the given DNA sequence using Reed-Solomon error correction.
 
         Args:
             encodeded_data: The DNA sequence without the RS parity bytes, i.e. [index | payload | checksum] sequence.
-            parity_dna_sequence: The DNA sequence representing the Reed-Solomon parity bytes.
             before_sequence: The sequence before the parity bytes in the oligo.
             after_sequence: The sequence after the parity bytes in the oligo.
+            parity_dna_sequence: The DNA sequence representing the Reed-Solomon parity bytes.
 
         Returns:
             A tuple containing the corrected data DNA and corrected RS parity DNA.
@@ -435,9 +450,9 @@ class ReedSolomon:
 
         # Decode the data using the Reed-Solomon decoder
         decoded_sequence, corrected_parity_bytes = self._decode(
-            encoded_data=encodeded_data,
+            encoded_data=encoded_data,
             parity_bytes=parity_bytes, 
-            sequence_length=len(encodeded_data),
+            sequence_length=len(encoded_data),
             erasures=erasures
         )
 

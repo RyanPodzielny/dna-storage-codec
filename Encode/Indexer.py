@@ -30,22 +30,22 @@ class Indexer:
 
     @abstractmethod
     def calculate_total_valid_indices(self) -> int:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @staticmethod
     def determine_optimal_width(required_capacity: int, *args: Any, **kwargs: Any) -> int:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @abstractmethod
     def rank(self, index_sequence: str, *args: Any, **kwargs: Any) -> int:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
     @abstractmethod
     def unrank(self, index: int, *args: Any, **kwargs: Any) -> str:
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError()
 
 
 class DNAMapIndexer(Indexer):
@@ -203,34 +203,38 @@ class GoldmanIndexer(Indexer):
         self.max_run_length: int = 1  
 
 
-    def _decimal_to_trit(self, index: int) -> str:
+    @staticmethod
+    def decimal_to_trit(decimal: int, width: int) -> str:
         """
-        Converts a decimal index to a trit representation.
+        Converts a decimal to a trit representation.
 
         Args:
-            index: The decimal index to convert.
+            decimal: The decimal to convert.
 
         Returns:
-            The trit representation of the decimal index.
+            The trit representation of the decimal.
 
         Raises:
-            ValueError: If the index is negative.
+            ValueError: If the decimal is negative.
         """
-        if index < 0:
+        if decimal < 0:
             raise ValueError("Index must be a non-negative integer.")
 
         trit: str = ""
-        while index > 0:
-            trit = str(index % 3) + trit
-            index //= 3
+        while decimal > 0:
+            trit = str(decimal % 3) + trit
+            decimal //= 3
 
-        # Add leading zeros to make representation same as width
-        zeros: str = "0" * (self.width - len(trit))
+        zeros: str = ""
+        if len(trit) < width:
+            # Add leading zeros to make representation same as width
+            zeros = "0" * (width - len(trit))
 
         return zeros + trit
 
 
-    def _trit_to_decimal(self, trit: str) -> int:
+    @staticmethod
+    def trit_to_decimal(trit: str) -> int:
         """
         Converts a trit representation to a decimal index.
 
@@ -318,7 +322,7 @@ class GoldmanIndexer(Indexer):
             before_end = before_sequence[-1] 
 
         # Convert decimal index to trit representation, then use Goldman mapping to convert to DNA
-        trit_representation: str = self._decimal_to_trit(index)
+        trit_representation: str = GoldmanIndexer.decimal_to_trit(index, self.width)
 
         # Want to that this is actually an indexing unrank error rather than encoding (helps locate)
         try:
@@ -359,7 +363,7 @@ class GoldmanIndexer(Indexer):
         try:
             # Convert DNA bases to trits using Goldman mapping and back to decimal index
             trit_representation: str = Goldman().dna_to_trit(index_sequence, start_base=before_end)
-            rank: int = self._trit_to_decimal(trit_representation)
+            rank: int = GoldmanIndexer.trit_to_decimal(trit_representation)
 
             return rank
         except EncodingError as _:
@@ -440,8 +444,6 @@ class EnumerativeIndexer(Indexer):
         Returns:
             A tuple containing the homopolymer run lengths of the before and after sequences.
 
-        Raises:
-            ExeceedsMaxRunLengthError: If the before or after sequences are above the maximum run length
         """
         before_run: int = self._run_length(before_sequence, reverse=True)
         after_run: int = self._run_length(after_sequence, reverse=False)
@@ -450,15 +452,6 @@ class EnumerativeIndexer(Indexer):
         if ignore_run_length and self.max_run_length >= 0:
             before_run = min(before_run, self.max_run_length)
             after_run = min(after_run, self.max_run_length)
-
-        # Check if the before or after exceeds the maximum run length, which would make it impossible to generate 
-        #   valid index sequences with the max run length constraint.
-        if not ignore_run_length and (before_run > self.max_run_length or after_run > self.max_run_length):
-            raise MaxRunLengthError(
-                message="Before or after sequences exceed the maximum run length",
-                sequence=f"{before_sequence} {after_sequence}",
-                max_run_length=self.max_run_length
-            )
 
         return before_run, after_run
 
@@ -680,10 +673,10 @@ class EnumerativeIndexer(Indexer):
                     width=self.width
                 )
 
-        # Check the boundary between index and after.
+        # Check the boundary between index and after. Should never be a problem.
         if (not ignore_run_length and previous_base == ending_base and index_run + after_run > self.max_run_length):
             raise MaxRunLengthError(
-                message="Index sequence and after exceed the maximum run length.",
+                message="Index sequence and after exceed the maximum run length",
                 sequence=index_sequence,
                 max_run_length=self.max_run_length
             )

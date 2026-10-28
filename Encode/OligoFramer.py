@@ -6,8 +6,10 @@ from pathlib import Path
 from Encode.Helpers.Errors import Error, ExpectedLengthError, IndexingError, PayloadLengthError, RankError
 from Encode.Methods.Encoding import Encoding
 from Encode.Indexer import Indexer
-from Encode.ErrorCorrection.InnerCodes import CheckSum, ReedSolomon
+from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
+from Encode.ErrorCorrection.OuterCodes import OuterCodes
 from Encode.Methods.HuffmanCoding import Huffman
+
 
 class OligoFramer:
     """
@@ -21,7 +23,8 @@ class OligoFramer:
                  oligo_length: int, overhead_margin: float,
                  start_primer: str, end_primer: str, 
                  encoder: Encoding, indexer: Indexer, 
-                 checksum: CheckSum, inner_error_correction: ReedSolomon | None = None):
+                 checksum: CheckSum, 
+                 inner_correction: RSInner | None = None, outer_correction: OuterCodes | None = None):
 
         """
         Initializes the OligoFramer with the given parameters.
@@ -42,23 +45,25 @@ class OligoFramer:
         self.encoder: Encoding = encoder
         self.indexer: Indexer = indexer
         self.checksum: CheckSum = checksum
-        self.inner_error_correction: ReedSolomon | None = inner_error_correction
-
-        print(f"Start primer: {self.start_primer}, End primer: {self.end_primer}")
+        self.inner_correction: RSInner | None = inner_correction
+        self.outer_correction: OuterCodes | None = outer_correction\
 
         # Need to see how much width is left for the payload to determine the number of oligos and the index width
         self.width_left: int = 0
         self.width_left += oligo_length - len(self.start_primer) - len(self.end_primer) - self.checksum.get_dna_bases()
         # If we have inner codes, we need to ensure we count them
-        if self.inner_error_correction:
-            self.width_left -= self.inner_error_correction.get_dna_bases()
+        if self.inner_correction:
+            self.width_left -= self.inner_correction.get_dna_bases()
+
+        self.all_indices: list[str] = []
         
         self.num_oligos: int = 0
         # Determine the number of oligos and the index width based on the available width and overhead margin
         self.num_oligos, self.indexer.width = OligoFramer.determine_oligos_and_width(
             overhead_margin=overhead_margin, width_left=self.width_left,
             in_path=self.in_path,
-            encoder=self.encoder, indexer=self.indexer
+            encoder=self.encoder, indexer=self.indexer,
+            outer_error_correction=self.outer_correction
         )
         self.width_left -= self.indexer.width
 
@@ -89,7 +94,8 @@ class OligoFramer:
     @staticmethod
     def determine_oligos_and_width(overhead_margin: float, width_left: int,
                                    in_path: str,
-                                   encoder: Encoding, indexer: Indexer) -> tuple[int, int]:
+                                   encoder: Encoding, indexer: Indexer,
+                                   outer_error_correction: OuterCodes | None = None) -> tuple[int, int]:
         """
         Determines the number of oligos needed to encode the input file, and the
         index width required to address them.
@@ -133,7 +139,12 @@ class OligoFramer:
                     payload_length=payload_bases
                 )
 
+            # Calculate the number of oligos needed to encode the margined bases, and the required width to address them
             num_oligos: int = math.ceil(margined_bases / payload_bases)
+            if outer_error_correction:
+                num_oligos = outer_error_correction.calculate_total_strands(num_oligos)
+
+            # Determine the required index width to address the number of oligos
             required_index_width: int = indexer.determine_optimal_width(
                 required_capacity=num_oligos, 
                 max_run_length=indexer.max_run_length
@@ -166,9 +177,8 @@ class OligoFramer:
             UnrankError: If the index sequence is not in bounds of capacity.
         """
 
-        # Get all indices and previous bases for the indexer
+        # Generate all indices needed by payload and outer-code strands.
         indices: list[str] = []
-        # Generate only the indices needed for the current segment estimate.
         for index in range(self.num_oligos):
             index_sequence: str = self.indexer.unrank(
                 index=index, 
@@ -177,11 +187,16 @@ class OligoFramer:
             )
             indices.append(index_sequence)
 
+        # Select the payload indices based on the outer error correction scheme, if any
+        payload_indices: list[str] = indices
+        if self.outer_correction:
+            payload_indices = self.outer_correction.select_payload_indices(indices)
+
         # Encode the file content into segments
         items: tuple[dict[str, str], list[str], Any] = self.encoder.encode_segments(
             data=file_content, 
             payload_length=self.payload_length, 
-            previous_sequences=indices
+            previous_sequences=payload_indices
         )
 
         huffman_codes: dict[str, str] = items[0]
@@ -189,6 +204,66 @@ class OligoFramer:
 
         # Update our number of oligos based on the actual number of encoded segments
         self.num_oligos = len(encoded_segments)
+
+        # Keep the complete index list available to the outer-code stage while returning payload indices for framing the 
+        #   encoded payload strands.
+        self.all_indices = indices
+        return payload_indices, huffman_codes, encoded_segments
+
+
+    def _extend_indices(self) -> tuple[list[str], dict[str, str], list[str]]:
+        """
+        Extends the index width until there are enough indices to address all encoded segments.
+
+        Args:
+            in_path: The path to the input file.
+
+        Returns:
+            A tuple containing:
+                - A list of index sequences for the number of oligos needed to encode the input file.
+                - A dictionary mapping each unique symbol in the input file to its corresponding Huffman code.
+                - A list of encoded segments corresponding to the input file content.
+
+        Raises:
+            FileNotFoundError: If the input file does not exist.
+            IndexerError: If the index sequence is not in bounds of capacity (shoulnd't happen since we adjust before 
+                but it can be raised while framing if index goes out of bounds).
+            PayloadLengthError: If the payload length is less than or equal to 0.
+            UnrankError: If the index sequence is not in bounds of capacity.
+            UnicodeDecodeError: If the input file cannot be read as UTF-8.
+        """
+
+        # Get our file content
+        with open(self.in_path, "r", encoding="utf-8") as file:
+            file_content: str = file.read()
+
+        indices: list[str] 
+        huffman_codes: dict[str, str]
+        encoded_segments: list[str]
+        # While we don't have enough indicies for number of segments, keep increasing the index width and trying again
+        while True:
+            try:
+                indices, huffman_codes, encoded_segments = self._generate_segments(file_content)
+            except IndexingError:
+                # The estimate did not provide enough indices for the encoder's actual segment count.
+                self.width_left -= 1
+                self.indexer.width += 1
+                self.payload_length = self.width_left
+                continue
+
+            # Recalculate the number of strands from the actual encoded payload (depending on if we have outer ECC)
+            self.num_oligos = len(encoded_segments)
+            if self.outer_correction:
+                self.num_oligos = self.outer_correction.calculate_total_strands(len(encoded_segments))
+
+            # Ensure the indexer can address every payload and parity strand.
+            if self.indexer.calculate_total_valid_indices() >= self.num_oligos:
+                break
+
+            # Increase the index width and recalculate the payload length
+            self.width_left -= 1
+            self.indexer.width += 1
+            self.payload_length = self.width_left
 
         return indices, huffman_codes, encoded_segments
 
@@ -218,31 +293,35 @@ class OligoFramer:
 
         # Calculate the checksum sequence
         checksum_sequence: str = self.checksum.encode_to_dna(
-            self.checksum.calculate_checksum(index_sequence + payload_sequence),
             before_sequence=payload_sequence,
-            after_sequence=self.end_primer
+            after_sequence=self.end_primer,
+            checksum=self.checksum.calculate_checksum(index_sequence + payload_sequence),
         )
 
         # Calculate the Reed-Solomon parity sequence if inner error correction is enabled
         rs_parity_sequence: str = ""
-        if self.inner_error_correction:
+        if self.inner_correction:
             protected_sequence: str = index_sequence + payload_sequence + checksum_sequence
-            rs_parity_sequence: str = self.inner_error_correction.encode_to_dna(
-                protected_sequence,
+            rs_parity_sequence: str = self.inner_correction.encode_to_dna(
                 before_sequence=checksum_sequence,
                 after_sequence=self.end_primer,
+                encoded_data=protected_sequence
             )
 
         # Add primers if requested
         framed_oligo: str = ""
         if include_primers:
             framed_oligo = self.start_primer +\
-                           index_sequence + payload_sequence +\
-                           checksum_sequence + rs_parity_sequence +\
+                           index_sequence +\
+                           payload_sequence +\
+                           checksum_sequence +\
+                           rs_parity_sequence +\
                            self.end_primer
         else:
-            framed_oligo = index_sequence + payload_sequence +\
-                           checksum_sequence + rs_parity_sequence
+            framed_oligo = index_sequence +\
+                           payload_sequence +\
+                           checksum_sequence +\
+                           rs_parity_sequence
         
         return framed_oligo
 
@@ -261,32 +340,12 @@ class OligoFramer:
             UnicodeDecodeError: If the input file cannot be read as UTF-8.
             UnrankError: If the index sequence is not in bounds of capacity.
         """
-        # Get our file content
-        with open(self.in_path, "r", encoding="utf-8") as file:
-            file_content: str = file.read()
 
-        indices: list[str] 
+        indices: list[str]
         huffman_codes: dict[str, str]
         encoded_segments: list[str]
-        # While we don't have enough indicies for number of segments, keep increasing the index width and trying again
-        while True:
-            try:
-                indices, huffman_codes, encoded_segments = self._generate_segments(file_content)
-            except IndexingError:
-                # The estimate did not provide enough indices for the encoder's actual segment count.
-                self.width_left -= 1
-                self.indexer.width += 1
-                self.payload_length = self.width_left
-                continue
-
-            # While we don't have enough indices for the number of encoded segments, increase our width and try again
-            if self.indexer.calculate_total_valid_indices() >= self.num_oligos:
-                break
-
-            # Increase the index width and recalculate the payload length
-            self.width_left -= 1
-            self.indexer.width += 1
-            self.payload_length = self.width_left
+        # Extend the amount of indicides/width of the index until we are sure we will have enough for num of segments
+        indices, huffman_codes, encoded_segments = self._extend_indices()
 
         # And frame them
         framed_oligos: list[str] = []
@@ -319,7 +378,7 @@ class OligoFramer:
             start_primer_length = 0
             end_primer_length = 0
         checksum_length: int = self.checksum.get_dna_bases()
-        rs_parity_length: int = self.inner_error_correction.get_dna_bases() if self.inner_error_correction else 0
+        rs_parity_length: int = self.inner_correction.get_dna_bases() if self.inner_correction else 0
 
         # Ensure the framed oligo is of the expected length
         if len(framed_oligo) != expected_length:
@@ -343,7 +402,7 @@ class OligoFramer:
 
         # Extract the RS parity sequence if inner error correction is enabled
         rs_sequence: str = ""
-        if self.inner_error_correction:
+        if self.inner_correction:
             rs_parity_start: int = checksum_end
             rs_parity_end: int = rs_parity_start + rs_parity_length
             rs_sequence: str = framed_oligo[rs_parity_start:rs_parity_end]
@@ -369,9 +428,11 @@ class OligoFramer:
 
         # Go through each framed oligo and unframe it, yielding the results
         for framed_oligo in framed_oligos:
-            # TODO: UnpectedLengthError will occur on indel, we will eventually want to try to rebuild it with the inner
-            #   code, but will mark for erasure if can't
-            yield self.unframe_oligo(framed_oligo, expected_length)
+            try:
+                yield self.unframe_oligo(framed_oligo, expected_length)
+            # Yield empty strings for any oligo that does not match the expected length, as we can't unframe it
+            except ExpectedLengthError as _:
+                yield ("", "", "", "")
 
 
     def _checksum_is_valid(self, index_sequence: str, payload_sequence: str, checksum_sequence: str) -> bool:
@@ -389,12 +450,12 @@ class OligoFramer:
         try:
             # Decode the checksum from the DNA sequence and verify it against the index and payload
             checksum: int = self.checksum.decode_from_dna(
-                dna_sequence=checksum_sequence,
+                encoded_data=checksum_sequence,
                 before_sequence=payload_sequence,
                 after_sequence=self.end_primer
             )
             return self.checksum.verify_checksum(
-                data=index_sequence + payload_sequence,
+                encoded_data=index_sequence + payload_sequence,
                 checksum=checksum
             )
         # Any custom error means we fail the checksum 
@@ -425,16 +486,16 @@ class OligoFramer:
             KeyError: If the indexer fails to unrank the corrected parity bytes back to DNA sequences.
             ExpectedLengthError: If the length of the corrected oligo does not match the expected length.
         """
-        if not self.inner_error_correction:
+        if not self.inner_correction:
             return None
 
         # Correct the oligo using RS codes
         encoded_data: str = index_sequence + payload_sequence + checksum_sequence
-        corrected_data, corrected_parity = self.inner_error_correction.decode_from_dna(
-            encodeded_data=encoded_data,
-            parity_dna_sequence=rs_sequence,
+        corrected_data, corrected_parity = self.inner_correction.decode_from_dna(
+            encoded_data=encoded_data,
             before_sequence=checksum_sequence,
-            after_sequence=self.end_primer
+            after_sequence=self.end_primer,
+            parity_dna_sequence=rs_sequence,
         )
 
         # Unframe the corrected oligo to get the corrected index, payload, and checksum sequences
@@ -481,17 +542,23 @@ class OligoFramer:
             UnrankError: If the index sequence is not in bounds of capacity.
         """
         decoded_segments: list[str | None] = []
+        expected_length: int = self.oligo_length - len(self.start_primer) - len(self.end_primer)
 
         # For all our unframed oligos, check if the checksum is valid, if not, try to correct it with RS codes
         for index_sequence, payload_sequence, checksum_sequence, rs_sequence in self.unframe_all_oligos(framed_oligos):
             # Oligo without the primers
             oligo: str = index_sequence + payload_sequence + checksum_sequence + rs_sequence
 
+            # Mark for erasure if the oligo is not the expected length
+            if len(oligo) != expected_length:
+                decoded_segments.append(None)
+                continue
+
             # Check if we can validate the checksum, if so, we can just add the primers and move on
             if self._checksum_is_valid(index_sequence, payload_sequence, checksum_sequence):
                 # Use our error correction to fix the parity bits (really unncessary but whatever)
-                if self.inner_error_correction:
-                    rs_sequence = self.inner_error_correction.encode_to_dna(
+                if self.inner_correction:
+                    rs_sequence = self.inner_correction.encode_to_dna(
                         encoded_data=index_sequence + payload_sequence + checksum_sequence,
                         before_sequence=checksum_sequence,
                         after_sequence=self.end_primer
@@ -503,7 +570,7 @@ class OligoFramer:
 
                 continue
             
-            if self.inner_error_correction:
+            if self.inner_correction:
                 try:
                     corrected_oligo = self._correct_oligo(
                         index_sequence=index_sequence,

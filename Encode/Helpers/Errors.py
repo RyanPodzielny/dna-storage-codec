@@ -123,3 +123,13 @@ class InnerCodeError(Error):
                  sequence: str):
         self.sequence: str = sequence
         super().__init__(f"{message}: {sequence} could not be corrected by inner error correction.")
+
+
+class OuterCodeError(Error):
+    """
+    Error raised when outer error correction fails to correct a sequence.
+    """
+    def __init__(self, 
+                 *,
+                 message: str = "Outer error correction failed"):
+        super().__init__(f"{message}: Could not perform outer error correction on the provided sequences.")
