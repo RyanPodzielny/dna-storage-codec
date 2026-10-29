@@ -1,17 +1,22 @@
 from abc import abstractmethod
 from typing import ClassVar, Final, List, override
+from numpy.typing import NDArray
 
 # Can't use reedsolo because it doesn't support GF(3^6) and has a max of 255 symbols. We need to encode each column of
 #   the oligos as 6-bit symbols, which gives us 3^6 = 729 symbols. This way we can retain the same fixed-length oligo
 #   and use Goldman's rotation scheme to avoid homopolymers. It is much slower than reedsolo, but it the best option.
 import galois
+import numpy as np
 
-from Encode.Helpers.Errors import OuterCodeError
+from Encode.Helpers.Errors import MismatchSegments, OuterCodeError, PayloadLengthError
 from Encode.Indexer import GoldmanIndexer
 from Encode.Methods.HuffmanCoding import Goldman
 
+
 class OuterCodes():
     def __init__(self):
+        self.data_capacity: int = 0
+        self.parity_per_block: int = 0
         pass
 
 
@@ -23,7 +28,15 @@ class OuterCodes():
     @abstractmethod
     def select_payload_indices(self, indices: List[str]) -> List[str]:
         raise NotImplementedError()
-    
+
+
+    @abstractmethod
+    def add_redundancy(self, previous_sequences: List[str], payload_sequences: List[str]) -> List[str]:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def perform_correction(self, previous_sequences: List[str], encoded_sequences: List[str | None]) -> List[str | None]:
+        raise NotImplementedError()
 
     @abstractmethod
     def get_addtional_strands(self) -> int:
@@ -133,7 +146,9 @@ class RSOuter(OuterCodes):
         return int("".join(str(trit) for trit in trits), 3)
 
 
-    def _validate_segments(self, previous_segments: List[str], payload_segments: List[str]) -> None:
+    def _validate_segments(self,
+                           previous_segments: List[str] | List[str | None], 
+                           payload_segments: List[str] | List[str | None]) -> None:
         """
         Validates the previous and payload segments for Reed-Solomon error correction.
 
@@ -143,11 +158,16 @@ class RSOuter(OuterCodes):
 
         Raises:
             ValueError: If previous_segments or payload_segments is empty/None.
+            MismatchSegments: If there are not enough previous sequences for the payload and parity strands.
         """
         if not previous_segments:
             raise ValueError("Previous segments cannot be empty.")
         if not payload_segments:
             raise ValueError("Payload segments cannot be empty.")
+        if len(previous_segments) < len(payload_segments):
+            raise MismatchSegments(
+                message="There must be at least one previous sequence for each payload sequence"
+            )
 
 
     def _segment_to_blocks(self, 
@@ -222,15 +242,49 @@ class RSOuter(OuterCodes):
         return dna_sequence
 
 
+    def _retrieve_payload_length(self, payload_segments: List[str] | List[str | None]) -> int:
+        """
+        Retrieves the length of the payload segments.
+
+        Args:
+            payload_segments: The payload segments to be put RS parity on.
+
+        Returns:
+            The length of the payload segments.
+
+        Raises:
+            ValueError: If payload_segments is empty/None.
+            PayloadLengthError: If the payload length is 0.
+        """
+        if not payload_segments:
+            raise ValueError("Payload segments cannot be empty.")
+
+        # Get the next payload sequence that isn't none, if we don't find one, then the payload length is 0 and we 
+        #   should raise an error, regardless if we allowing None's or not - we need them to have a length
+        payload_length: int = next(
+            (len(segment) for segment in payload_segments if segment is not None), 
+            0
+        )
+        if payload_length == 0:
+            raise PayloadLengthError(
+                message="Payload segments must have a positive length",
+                payload_length=payload_length
+            )
+
+        return payload_length
+
+
     def _retrieve_columns(self,
                           previous_segments: List[str], 
-                          payload_segments: List[str]) -> List[List[galois.FieldArray]]:
+                          payload_segments: List[str] | List[str | None],
+                          error_on_none: bool = False) -> list[list[galois.FieldArray]]:
         """
         Retrieves the columns of bases from the previous bases and payload segments.
 
         Args:
             previous_segments: The previous bases to be used for the columns.
             payload_segments: The payload segments to be put RS parity on.
+            error_on_none: If True, raises an error if any of the payload segments are None. If False, skips any None
 
         Returns:
             A list of columns, where each column is a list of lists containing the previous base and the corresponding 
@@ -240,17 +294,12 @@ class RSOuter(OuterCodes):
             ValueError: If previous_segments or payload_segments is empty/None.
             EncodingError: If the Goldman mapping fails to convert DNA bases to trits - likely to happen when not 
                 accounting for the specific spliced indices used for indexing.
+            PayloadLengthError: If the payload length is 0.
         """
         self._validate_segments(previous_segments, payload_segments)
 
-        if len(previous_segments) < len(payload_segments):
-            raise ValueError("There must be at least one previous sequence for each payload sequence.")
-
-        payload_length: int = len(payload_segments[0])
-        if payload_length == 0:
-            raise ValueError("Payload sequences cannot contain empty sequences.")
-        if any(len(segment) != payload_length for segment in payload_segments):
-            raise ValueError("Payload sequences must all have the same length.")
+        # Need to know payload legnth
+        payload_length: int = self._retrieve_payload_length(payload_segments)
 
         columns: List[List[galois.FieldArray]] = []
 
@@ -258,16 +307,26 @@ class RSOuter(OuterCodes):
         for index in range(0, payload_length, RSOuter.COLUMN_LENGTH):
             column: List[galois.FieldArray] = []
 
-            # Ensure we add proper virtual zero trits for the final column if it is shorter than six bases
-            column_length: int = min(RSOuter.COLUMN_LENGTH, payload_length - index)
-
             # Collect the same six-base position from every data strand.
             for segment_index, segment in enumerate(payload_segments):
+                # Get our previous segment for current payload message
+                previous_segment: str = previous_segments[segment_index]
+
+                # If the segment is None, we either skip it or raise an error based on the error_on_none flag
+                if segment is None and not error_on_none:
+                    column.append(self.GF(0))
+                    continue
+                # Only reach if error_on_none is True and segment is None, so we raise an error
+                if segment is None:
+                    raise OuterCodeError(
+                        message="Payload segment is None, but error_on_none is True",
+                    )
+
                 # The first slice starts after the strand's index. Later slices continue from the preceding DNA base in 
                 #   the same strand
                 previous_base: str
                 if index == 0:
-                    previous_base = previous_segments[segment_index][-1]
+                    previous_base = previous_segment[-1]
                 else:
                     previous_base = segment[index - 1]
 
@@ -276,7 +335,7 @@ class RSOuter(OuterCodes):
                 # The concrete outer-code variant converts the DNA column to the field representation used by its 
                 #   Reed-Solomon code
                 column.append(self.GF(self._dna_to_field_symbol(column_bases, previous_base)))
-                
+
             columns.append(column)
 
         return columns
@@ -299,22 +358,28 @@ class RSOuter(OuterCodes):
 
         Raises:
             ValueError: If previous_sequences or payload_sequences is empty/None.
-            OuterCodeError: If there are not enough previous sequences for the payload and parity strands.
+            MismatchSegments: If there are not enough previous sequences for the payload and parity strands.
         """
         self._validate_segments(previous_sequences, payload_sequences)
 
-        # Every data and parity strand needs its own reserved index.
+        # Every data and parity strand needs its own reserved index. Different from previous sequences being smaller,
+        #   we need to know that we have enough sequences for all pairty strands. Different from the check of parity 
+        #   strands being less than the data strands - this is do we have enough for adding parity?
         if len(previous_sequences) < self.calculate_total_strands(len(payload_sequences)):
-            raise OuterCodeError(
-                message="Not enough previous sequences for the payload and parity strands."
+            raise MismatchSegments(
+                message="Not enough previous sequences for the payload and parity strands"
             )
 
         parity_strands: List[str] = []
 
         previous_blocks, payload_blocks = self._segment_to_blocks(previous_sequences, payload_sequences)
-        for index_block, payload_block in zip(previous_blocks, payload_blocks):
-            # Get our columns for this block, which is a all the GF symbols
-            columns: List[List[galois.FieldArray]] = self._retrieve_columns(index_block, payload_block)
+        for previous_block, payload_block in zip(previous_blocks, payload_blocks):
+            # Get our columns for this block, which is a all the GF symbols - if we got none we got a problem
+            columns: List[List[galois.FieldArray]] = self._retrieve_columns(
+                previous_segments=previous_block, 
+                payload_segments=payload_block,
+                error_on_none=True
+            )
 
             # Each output entry is one parity strand assembled column by column, so we need to initalize them all first
             #   in order to ensure we can append to them in correct order
@@ -323,7 +388,7 @@ class RSOuter(OuterCodes):
             # We need to keep track of the last base - currently its all the indexes (we assume)
             parity_previous_bases: List[str] = []
             for index in range(self.parity_per_block):
-                parity_previous_bases.append(index_block[self.data_capacity + index][-1])
+                parity_previous_bases.append(previous_block[self.data_capacity + index][-1])
         
             for column_index, column in enumerate(columns):
                 # Preserve the actual payload length when the final column is shorter than six bases
@@ -335,10 +400,9 @@ class RSOuter(OuterCodes):
                 # RS returns one field symbol for each parity strand for this column
                 parity_column: galois.FieldArray = self.rs.encode(self.GF(column), output="parity")
 
-                # Still uses same parity per block regardlesss of block size
+                # We need to convert each parity symbol back into DNA bases and add them to corresponding parity strand
                 for parity_index in range(self.parity_per_block):
-                    # The concrete outer-code variant converts the parity
-                    # field symbol back into DNA.
+                    # Convert to a usable int based on the field
                     parity_sequence: str = self._field_symbol_to_dna(
                         symbol=int(parity_column[parity_index]),
                         previous_base=parity_previous_bases[parity_index],
@@ -347,8 +411,7 @@ class RSOuter(OuterCodes):
 
                     parity_block[parity_index] += parity_sequence
 
-                    # Goldman needs the last emitted base for the next
-                    # column. Direct DNA conversion does not use this state.
+                    # Goldman needs the last emitted base for the next column. Direct DNA conversion does not use this
                     if parity_sequence:
                         parity_previous_bases[parity_index] = parity_sequence[-1]
 
@@ -357,22 +420,139 @@ class RSOuter(OuterCodes):
 
         return parity_strands
 
-    def preform_correction(self, encoded_sequecnes: List[str | None]) -> List[str | None]:
+
+    def _get_erasure_mask(self, payload_block: List[str | None], ) -> List[bool]:
+        """
+        Creates an erasure mask for the given sequences. True indicates an erasure (None), and False indicates a valid 
+        sequence.
+
+        Args:
+            payload_block: The list of payload segments.
+
+        Returns:
+            A list of booleans representing the erasure mask.
+        """
+        # Get the erasure mask - everywhere they are are 
+        erasure_mask: List[bool] = []
+        for sequence in payload_block:
+            if sequence is None:
+                erasure_mask.append(True)
+                continue
+
+            erasure_mask.append(False)
+
+        return erasure_mask
+
+
+    def perform_correction(self, 
+                           previous_sequences: List[str], 
+                           encoded_sequences: List[str | None] ) -> List[str | None]:
         """
         Performs Reed-Solomon error correction on the encoded sequences.
 
         Args:
-            encoded_sequences: The list of encoded sequences, we retrieve after decoded. We assume that sequences that 
+            previous_sequences: The complete list of index sequences. These provide the preceding base needed to
+                convert the first six-base column back from a field symbol. Assumed to be sorted. We regenerate any 
+                missing one, so no worries about them being none from erasure
+            encoded_sequences: The list of encoded sequences we retrieve after decoding. We assume that sequences that
                 are None are the ones marked for erasure. The sequences that are not None are assumed to be correct and 
-                will be used to correct the others.
+                will be used to correct the others. Also assumes that the sequences are in the same order as they were 
+                originally encoded (that is sorted by index), so we can use the previous
 
         Returns:
             The list of corrected sequences without the parity strands. Sequences that could not be corrected = None.
+        
+        Raises:
+            ValueError: If encoded_sequences or previous_sequences is empty/None.
+            PayloadLengthError: If the payload length is 0.
+            MistmatchSegments: If there are not enough previous sequences for the payload and parity strands. Or if the 
+                RS block does not contain enough payload and parity strands to perform correction.
         """
+        self._validate_segments(previous_sequences, encoded_sequences)
 
+        # Must be same length in this scenario
+        if len(previous_sequences) != len(encoded_sequences):
+            raise MismatchSegments(
+                message="Previous and encoded sequences must be the same length for performing correction"
+            )
 
-        # Placeholder for the actual error correction logic
-        return encoded_sequecnes
+        # Some sequences we may not be able to correct, unlikely. Returning None means those sequences are forever lost
+        corrected_sequences: List[str | None] = []
+
+        # Should remain true for all blocks
+        payload_length: int = self._retrieve_payload_length(encoded_sequences)
+
+        # Go through each block and correct one at at time, ending block (likely not full) will be handled the same
+        for block_start in range(0, len(encoded_sequences), self.MAX_BLOCK_STRANDS):
+            # Get the block of previous sequences and encoded sequences for this RS block
+            previous_block: List[str] = previous_sequences[block_start:block_start + self.MAX_BLOCK_STRANDS]
+            payload_block: List[str | None] = encoded_sequences[block_start:block_start + self.MAX_BLOCK_STRANDS]
+
+            erasure_mask: List[bool] = self._get_erasure_mask(payload_block)
+
+            # Get the columns for this block, which is a all the GF symbols
+            columns: List[List[galois.FieldArray]] = self._retrieve_columns(
+                previous_segments=previous_block, 
+                payload_segments=payload_block,
+                error_on_none=False
+            )
+
+            # output="message" returns only the data symbols, so account for it
+            data_count: int = max(0, len(payload_block) - self.parity_per_block)
+            corrected_block: List[str] = [""] * data_count
+            block_failed: bool = False
+
+            for column_index, column in enumerate(columns):
+                # Preserve the actual payload length when the final column is shorter than six bases
+                column_length: int = min(
+                    RSOuter.COLUMN_LENGTH,
+                    payload_length - column_index * RSOuter.COLUMN_LENGTH
+                )
+
+                # RS returns one field symbol for each parity strand for this column
+                corrected_column: galois.FieldArray
+                errors: NDArray[np.int_] | int
+                corrected_column, errors = self.rs.decode(
+                    codeword=self.GF(column),
+                    erasures=np.array(erasure_mask),
+                    output="message",
+                    errors=True
+                )
+
+                # Galois reports an undecodable column with errors == -1. Goldman decoding is stateful across columns, 
+                #   so no later column can make a complete DNA strand valid after this point
+                if isinstance(errors, int) and errors == -1:
+                    block_failed = True
+                    break
+
+                # We need to convert each corrected symbol back into DNA bases and add them to corresponding payload 
+                #   strand. The last strand may not be uniform with the data capacity.
+                for payload_index in range(data_count):
+                    # Get our previous base for this strand
+                    if column_index == 0:
+                        previous_base: str = previous_block[payload_index][-1]
+                    else:
+                        previous_base: str = corrected_block[payload_index][column_index * RSOuter.COLUMN_LENGTH - 1]
+
+                    # Convert corrected symbol back to DNA bases
+                    corrected_sequence: str = self._field_symbol_to_dna(
+                        symbol=int(corrected_column[payload_index]),
+                        previous_base=previous_base,
+                        length=column_length
+                    )
+
+                    corrected_block[payload_index] += corrected_sequence
+
+            # A failed column prevents recovery of erased strands, but intact data strands remain usable. Do not return 
+            #   partially reconstructed strands because Goldman columns depend on their predecessors.
+            if block_failed:
+                corrected_sequences.extend(payload_block[:data_count])
+                continue
+
+            # Add the corrected block to the list of corrected sequences
+            corrected_sequences.extend(corrected_block)
+            
+        return corrected_sequences
 
 
     def calculate_total_strands(self, payload_strands: int) -> int:
@@ -430,7 +610,7 @@ class DirectDNARSOuter(RSOuter):
     Reed-Solomon outer code for encodings that allow homopolymers. We cannot convert "GGG" from Goldman trits and back
     as the rotation scheme doesnt allow for it. This DirectDNARSOuter class allows for direct DNA to GF(4^6) conversion
     without using Goldman's rotation scheme. Where we basically assigning each digit a base-4 value and converting the
-    them with six nt's (too keep consitient with the RSOuter class) into a GF(4^6) symbol. 
+    them with six nt's (too keep consitient with the RSOuter class) into a GF(4^6) symbol.
     """
 
     GF_ORDER: int = 4**6
@@ -446,7 +626,6 @@ class DirectDNARSOuter(RSOuter):
         "T": 3,
     }
     DIGIT_TO_DNA: Final[dict[int, str]] = {v: k for k, v in DNA_TO_DIGIT.items()}
-
 
     def __init__(self, redundancy_percentage: float = 0.1):
         """
@@ -483,22 +662,22 @@ class DirectDNARSOuter(RSOuter):
     @override
     def _field_symbol_to_dna(self, symbol: int, length: int, *args, **kwargs) -> str:
         """
-        Converts one GF(4^6) parity symbol back into DNA bases. Essientaly 'quits'? to decimal
+        Converts one GF(4^6) data symbol back into DNA bases. Essientaly 'quits' or qubits? to decimal. Only used for
+        data strands, parity strands go through _symbols_to_parity_dna.
 
         Args:
-            symbol: The GF(4^6) parity symbol to be converted back into DNA.
-            length: The length of the DNA sequence to be returned. This is used to ensure that
-                the DNA sequence is the same length as the original column.
+            symbol: The GF(4^6) symbol to be converted back into DNA.
+            length: The length of the DNA sequence to be returned. This is used to ensure that the DNA sequence is the
+                same length as the original column.
             *args and **kwargs, used to maintain compatibility
 
         Returns:
-            The DNA sequence corresponding to the GF(4^6) parity symbol.
+            The DNA sequence corresponding to the GF(4^6) symbol.
         """
         bases: str = ""
         for _ in range(self.COLUMN_LENGTH):
             digit: int = symbol % 4
             symbol //= 4
-            
             # Prepend each least-significant base so the final sequence stays in its original left-to-right order.
             bases = self.DIGIT_TO_DNA[digit] + bases
 

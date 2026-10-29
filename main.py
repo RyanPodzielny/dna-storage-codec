@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from Encode.Methods.Encoding import Encoding
-from Encode.Methods.HuffmanCoding import Goldman, Huffman, BitScanQuaternary, Pgram, Quaternary, Trenary
+from Encode.Methods.HuffmanCoding import Goldman, Huffman, BitScanQuaternary, Pgram, Quaternary, Ternary
 from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
 
 def check_match(original_file: str, decoded_file: str) -> bool:
@@ -104,7 +104,7 @@ def test_file(original_dir: str, encoded_dir: str, decoded_dir: str, file_name: 
     """Test Huffmans"""
     huffman_encoded_path: str = test_encoding(origin, file_encoded_dir, file_decoded_dir, Huffman(), original_size)
     test_encoding(origin, file_encoded_dir, file_decoded_dir, Quaternary(), original_size)
-    test_encoding(origin, file_encoded_dir, file_decoded_dir, Trenary(), original_size)
+    test_encoding(origin, file_encoded_dir, file_decoded_dir, Ternary(), original_size)
 
     # Find optimal k for BitScanQuaternary and test encoding/decoding
     optimal_k: int = BitScanQuaternary().find_optimal_k(origin)[0]

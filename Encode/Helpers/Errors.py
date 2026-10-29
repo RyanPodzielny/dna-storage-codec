@@ -133,3 +133,13 @@ class OuterCodeError(Error):
                  *,
                  message: str = "Outer error correction failed"):
         super().__init__(f"{message}: Could not perform outer error correction on the provided sequences.")
+
+
+class MismatchSegments(OuterCodeError):
+    """
+    Error raised when both previous and payload segments are None for the same index.
+    """
+    def __init__(self, 
+                 *,
+                 message: str = "Segments mismatching at critical indicies"):
+        super().__init__(message=f"{message}: Cannot perform error correction due to segment mismatches.")

@@ -561,10 +561,10 @@ class Huffman(Encoding):
         return table_size
 
 
-class Trenary(Huffman):
+class Ternary(Huffman):
     def __init__(self) -> None:
         """
-        Initializes a new instance of the HuffmanTrenary class.
+        Initializes a new instance of the Huffman class. Parent base != child base.
         """
         super().__init__()
         self.CHILDREN: int = 3
@@ -1635,6 +1635,7 @@ class Goldman(Huffman):
         trit_data: str = self.dna_to_trit(encoded_data)
 
         return super().decode(trit_data, huffman_codes, reverse=reverse)
+
 
     @override
     def estimate_bases_per_byte(self) -> float:

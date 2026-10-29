@@ -356,7 +356,9 @@ class OligoFramer:
         return framed_oligos
 
 
-    def unframe_oligo(self, framed_oligo: str, expected_length: int, include_primers: bool = True) -> tuple[str, str, str, str]:
+    def unframe_oligo(self, 
+                      framed_oligo: str, 
+                      expected_length: int, include_primers: bool = True) -> tuple[str, str, str, str]:
         """
         Unframes a single oligo, extracting the index and payload sequences.
 
@@ -587,12 +589,10 @@ class OligoFramer:
                 
                 # Any custom error means we fail the checksum and can't correct it
                 except Error:
-                    print(f"Custom error occurred for oligo Error")
                     decoded_segments.append(None)
 
                 # Reed-Solomon correction failed, mark as erasure
                 except ReedSolomonError as error:
-                    print(f"Reed-Solomon correction failed for oligo: {oligo}. Error: {error}")
                     decoded_segments.append(None)
 
                 # Move on
