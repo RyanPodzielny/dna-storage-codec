@@ -40,8 +40,6 @@ class OligoFramer:
 
         self.in_path: str = in_path
         self.oligo_length: int = oligo_length
-        # The requested length - oligo_length may shrink if the outer code needs a shorter payload
-        self.max_oligo_length: int = oligo_length
         self.start_primer: str = start_primer if len(start_primer) > 0 else Huffman.START_BASE
         self.end_primer: str = end_primer if len(end_primer) > 0  else Huffman.START_BASE
         self.encoder: Encoding = encoder
@@ -68,26 +66,13 @@ class OligoFramer:
         self.width_left -= self.indexer.width
 
         # Finally, the most important value, the payload length, which can be found after the index width is determined
-        self.payload_length: int = 0
-        self._update_payload_length()
+        self.payload_length: int = self.width_left
 
         if self.payload_length <= 0:
             raise PayloadLengthError(
                 message="Payload length must be greater than 0 after accounting for primers, index, checksum, and inner error correction", 
                 payload_length=self.payload_length
             )
-
-    def _update_payload_length(self) -> None:
-        """
-        Sets the payload length from the width left, fitted to what the outer code can protect. Any bases the outer
-        code can't use are trimmed from the oligo rather than left as filler.
-        """
-        self.payload_length = self.width_left
-        if self.outer_correction:
-            self.payload_length = self.outer_correction.fit_payload_length(self.width_left)
-
-        self.oligo_length = self.max_oligo_length - (self.width_left - self.payload_length)
-
 
     @property
     def indexer_width(self) -> int:
@@ -144,8 +129,6 @@ class OligoFramer:
         index_width: int = 0
         for _ in range(OligoFramer.MAX_ITERATIONS):
             payload_bases: int = width_left - index_width
-            if outer_error_correction:
-                payload_bases = outer_error_correction.fit_payload_length(payload_bases)
 
             # Not enough payload room, raise an error
             if payload_bases <= 0:
@@ -276,15 +259,14 @@ class OligoFramer:
                 # The estimate did not provide enough indices for the encoder's actual segment count.
                 self.width_left -= 1
                 self.indexer.width += 1
-                self._update_payload_length()
+                self.payload_length = self.width_left
                 continue
 
             # Recalculate the number of strands from the actual encoded payload (depending on if we have outer ECC)
             if self.outer_correction:
                 self.num_oligos = self.outer_correction.calculate_total_strands(len(encoded_segments))
 
-                # Regenerate the complete ordered index list after the final strand count is known. The encoder used
-                #   payload-only indices, but outer-code blocks require payload and parity indices in block order.
+                # Ensure we have enough indices now that we know how much more we need for the parity strands
                 indices = self._generate_indices()
             
             # Ensure the indexer can address every payload and parity strand.
@@ -294,7 +276,7 @@ class OligoFramer:
             # Increase the index width and recalculate the payload length
             self.width_left -= 1
             self.indexer.width += 1
-            self._update_payload_length()
+            self.payload_length = self.width_left
 
         return indices, huffman_codes, encoded_segments
 
@@ -378,7 +360,7 @@ class OligoFramer:
         # Extend the amount of indicides/width of the index until we are sure we will have enough for num of segments
         indices, huffman_codes, encoded_segments = self._extend_indices()
 
-        # If we have outer correction, we need to add in our parity strands
+        # If we have outer correction, we need to add the parity segments to the end of the payload segments, so that they are all in order
         if self.outer_correction:
             # Get our parity segments - these are the extra strands
             parity_segments = self.outer_correction.add_redundancy(indices, encoded_segments)

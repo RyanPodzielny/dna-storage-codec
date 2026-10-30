@@ -1,5 +1,4 @@
 from abc import abstractmethod
-from collections import Counter
 import math
 from typing import ClassVar, Final, List, override
 from numpy.typing import NDArray
@@ -10,8 +9,7 @@ from numpy.typing import NDArray
 import galois
 import numpy as np
 
-from Encode.Helpers.Errors import EncodingError, MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, \
-    PayloadLengthError
+from Encode.Helpers.Errors import MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, PayloadLengthError
 from Encode.Indexer import GoldmanIndexer
 from Encode.Methods.HuffmanCoding import Goldman
 
@@ -44,13 +42,6 @@ class OuterCodes():
     @abstractmethod
     def get_addtional_strands(self) -> int:
         raise NotImplementedError()
-
-    def fit_payload_length(self, payload_length: int) -> int:
-        """
-        Returns the largest payload length the outer code can protect that is at most payload_length. By default, any 
-        payload length works.
-        """
-        return payload_length
 
 
 class GoldmanRedundancy(OuterCodes):
@@ -141,103 +132,6 @@ class RSOuter(OuterCodes):
         )
         if cache_key not in self._RS_CACHE:
             self._RS_CACHE[cache_key] = self.rs
-
-
-    def _get_rs(self, parity_strands: int) -> galois.ReedSolomon:
-        """
-        Gets the Reed-Solomon code with the given number of parity symbols. A block with fewer payload strands uses a
-        shortened version of this code (galois handles the shortening when given fewer message symbols than k), but 
-        the parity count must match the code's n - k, so a partial block with less parity needs its own code.
-
-        Args:
-            parity_strands: The number of parity symbols (strands) per codeword.
-
-        Returns:
-            The cached Reed-Solomon code with that many parity symbols.
-        """
-        cache_key: tuple[int, int] = (self.GF_ORDER, parity_strands)
-        if cache_key not in self._RS_CACHE:
-            self._RS_CACHE[cache_key] = galois.ReedSolomon(
-                n=self.MAX_BLOCK_STRANDS,
-                k=self.MAX_BLOCK_STRANDS - parity_strands,
-                field=self.GF
-            )
-
-        return self._RS_CACHE[cache_key]
-
-
-    def _parity_for_block(self, payload_strands: int) -> int:
-        """
-        Gets the number of parity strands for a block holding payload_strands payload strands. Full blocks use 
-        parity_per_block, while a partial block (only ever the last one) gets parity matching the redundancy percentage.
-
-        Args:
-            payload_strands: The number of payload strands in the block.
-
-        Returns:
-            The number of parity strands for the block.
-        """
-        if payload_strands >= self.payload_per_block:
-            return self.parity_per_block
-
-        return math.ceil(payload_strands * self.redundancy_percentage)
-
-
-    def _payload_for_block(self, block_strands: int) -> int:
-        """
-        Inverse of _parity_for_block - recovers how many payload strands a block of block_strands total strands holds.
-        Payload + parity strictly increases with the payload count, so there is at most one match.
-
-        Args:
-            block_strands: The total number of strands (payload and parity) in the block.
-
-        Returns:
-            The number of payload strands in the block.
-
-        Raises:
-            MismatchSegments: If no payload count produces a block of that size.
-        """
-        for payload_strands in range(block_strands, 0, -1):
-            if payload_strands + self._parity_for_block(payload_strands) == block_strands:
-                return payload_strands
-
-        raise MismatchSegments(
-            message=f"A block of {block_strands} strands does not match any payload and parity layout"
-        )
-
-
-    @override
-    def fit_payload_length(self, payload_length: int) -> int:
-        """
-        Rounds the payload length down to a whole number of columns. A partial column cannot hold a full field symbol, 
-        so the parity strands would lose part of every parity symbol in that column.
-
-        Args:
-            payload_length: The number of bases available for the payload.
-
-        Returns:
-            The payload length rounded down to a multiple of COLUMN_LENGTH.
-        """
-        return payload_length - payload_length % self.COLUMN_LENGTH
-
-
-    def _is_valid_segment(self, segment: str, previous_base: str) -> bool:
-        """
-        Checks whether a segment can be converted into field symbols. A Goldman strand with a substitution that creates
-        a homopolymer cannot be, so it has to be treated as an erasure instead.
-
-        Args:
-            segment: The DNA segment to check.
-            previous_base: The base before the segment (the last base of its index).
-
-        Returns:
-            True if the segment can be converted, False otherwise.
-        """
-        try:
-            Goldman().dna_to_trit(segment, previous_base)
-            return True
-        except EncodingError:
-            return False
 
 
     @staticmethod
@@ -471,14 +365,6 @@ class RSOuter(OuterCodes):
         """
         self._validate_segments(previous_sequences, payload_sequences)
 
-        # Parity symbols need whole columns, otherwise we would have to truncate them
-        payload_length: int = self._retrieve_payload_length(payload_sequences)
-        if payload_length % self.COLUMN_LENGTH != 0:
-            raise PayloadLengthError(
-                message=f"Payload length must be a multiple of {self.COLUMN_LENGTH} for Reed-Solomon outer codes",
-                payload_length=payload_length
-            )
-
         # Every data and parity strand needs its own reserved index. Different from previous sequences being smaller,
         #   we need to know that we have enough sequences for all pairty strands. Different from the check of parity 
         #   strands being less than the data strands - this is do we have enough for adding parity?
@@ -489,12 +375,20 @@ class RSOuter(OuterCodes):
 
         parity_strands: List[str] = []
 
+        # Ensure that if we only have 1 block, with less than the payload_per_block, we adjust the payload_per_block to
+        #   match the actual number of payload strands
+        payload_per_block: int = self.payload_per_block
+        if len(payload_sequences) < self.payload_per_block:
+            payload_per_block = len(payload_sequences)
+
+        parity_per_block: int = self.parity_per_block
+
         previous_blocks, payload_blocks = self._segment_to_blocks(previous_sequences, payload_sequences)
         for previous_block, payload_block in zip(previous_blocks, payload_blocks):
-            # The last block may not be full, so it gets parity matching the redundancy percentage for that block
-            payload_per_block: int = len(payload_block)
-            parity_per_block: int = self._parity_for_block(payload_per_block)
-            rs: galois.ReedSolomon = self._get_rs(parity_per_block)
+            # If our current block is smaller than parity_per_block, we want to adjust our parity_per_block to be the 
+            #   same as the redundancy percentage for that block.
+            if len(payload_block) < self.parity_per_block:
+                parity_per_block = math.ceil(len(payload_block) * self.redundancy_percentage)
 
             # Get our columns for this block, which is a all the GF symbols - if we got none we got a problem
             columns: List[List[galois.FieldArray]] = self._retrieve_columns(
@@ -520,7 +414,7 @@ class RSOuter(OuterCodes):
                 )
 
                 # RS returns one field symbol for each parity strand for this column
-                parity_column: galois.FieldArray = rs.encode(self.GF(column), output="parity")
+                parity_column: galois.FieldArray = self.rs.encode(self.GF(column), output="parity")
 
                 # We need to convert each parity symbol back into DNA bases and add them to corresponding parity strand
                 for parity_index in range(parity_per_block):
@@ -601,37 +495,14 @@ class RSOuter(OuterCodes):
         # Some sequences we may not be able to correct, unlikely. Returning None means those sequences are forever lost
         corrected_sequences: List[str | None] = []
 
-        # Should remain true for all blocks. Use the most common length so one damaged strand can't set it
-        self._retrieve_payload_length(encoded_sequences)
-        payload_length: int = Counter(
-            len(segment) for segment in encoded_sequences if segment is not None
-        ).most_common(1)[0][0]
+        # Should remain true for all blocks
+        payload_length: int = self._retrieve_payload_length(encoded_sequences)
 
         # Go through each block and correct one at at time, ending block (likely not full) will be handled the same
         for block_start in range(0, len(encoded_sequences), self.MAX_BLOCK_STRANDS):
             # Get the block of previous sequences and encoded sequences for this RS block
             previous_block: List[str] = previous_sequences[block_start:block_start + self.MAX_BLOCK_STRANDS]
             payload_block: List[str | None] = encoded_sequences[block_start:block_start + self.MAX_BLOCK_STRANDS]
-
-            # Strands that are the wrong length or cannot be converted to field symbols (Goldman strands with a 
-            #   homopolymer) are unusable, so we mark them for erasure rather than failing the whole block
-            payload_block = [
-                segment
-                if segment is not None
-                    and len(segment) == payload_length
-                    and self._is_valid_segment(segment, previous_block[segment_index][-1])
-                else None
-                for segment_index, segment in enumerate(payload_block)
-            ]
-
-            # The last block may not be full, so recover its payload/parity split the same way add_redundancy made it
-            data_count: int = self._payload_for_block(len(payload_block))
-            rs: galois.ReedSolomon = self._get_rs(len(payload_block) - data_count)
-
-            # Nothing usable in this block, so there is nothing to correct from
-            if all(segment is None for segment in payload_block):
-                corrected_sequences.extend([None] * data_count)
-                continue
 
             erasure_mask: List[bool] = self._get_erasure_mask(payload_block)
 
@@ -642,7 +513,15 @@ class RSOuter(OuterCodes):
                 error_on_none=False
             )
 
+            # Adjust based on the actual payload length (our last block may not be full) like we do in add_redundancy.
+            #   Where we get the parity_per_block based on the redundancy percentage for this block if it is smaller 
+            #   than the configured
+            parity_per_block: int = self.parity_per_block
+            if len(payload_block) < self.parity_per_block:
+                parity_per_block = math.ceil(len(payload_block) * self.redundancy_percentage)
+
             # output="message" returns only the data symbols, so account for it
+            data_count: int = max(0, len(payload_block) - parity_per_block)
             corrected_block: List[str] = [""] * data_count
             block_failed: bool = False
 
@@ -656,7 +535,7 @@ class RSOuter(OuterCodes):
                 # RS returns one field symbol for each parity strand for this column
                 corrected_column: galois.FieldArray
                 errors: NDArray[np.int_] | int
-                corrected_column, errors = rs.decode(
+                corrected_column, errors = self.rs.decode(
                     codeword=self.GF(column),
                     erasures=np.array(erasure_mask),
                     output="message",
@@ -717,11 +596,12 @@ class RSOuter(OuterCodes):
         blocks: int = (payload_strands + self.payload_per_block - 1) // self.payload_per_block
         self.num_blocks = blocks
 
-        # Every block but the last is full. The last block holds whatever payload is left, plus its own parity
-        full_blocks: int = blocks - 1
-        last_payload: int = payload_strands - full_blocks * self.payload_per_block
+        # If the payload strands is less than the payload_per_block, we will only have one block, so we need to ensure 
+        #   that we return the correct total number of strands for that block
+        if payload_strands < self.payload_per_block:
+            return payload_strands + self.parity_per_block
 
-        return full_blocks * self.MAX_BLOCK_STRANDS + last_payload + self._parity_for_block(last_payload)
+        return blocks * self.MAX_BLOCK_STRANDS
 
 
     def select_payload_indices(self, indices: List[str]) -> List[str]:
@@ -746,6 +626,7 @@ class RSOuter(OuterCodes):
         payload_indices: List[str] = []
         for block_start in range(0, len(indices), self.MAX_BLOCK_STRANDS):
             block: List[str] = indices[block_start:block_start + self.MAX_BLOCK_STRANDS]
+
 
             # Add the first payload_per_block indices from the block to the payload_indices list
             payload_indices += block[:self.payload_per_block]
@@ -783,21 +664,6 @@ class DirectDNARSOuter(RSOuter):
             redundancy_percentage: The percentage of redundancy to be used in the outer code.
         """
         super().__init__(redundancy_percentage=redundancy_percentage)
-
-
-    @override
-    def _is_valid_segment(self, segment: str, *args, **kwargs) -> bool:
-        """
-        Checks whether a segment can be converted into field symbols - any string of A, C, G, and T can be.
-
-        Args:
-            segment: The DNA segment to check.
-            *args and **kwargs, used to maintain compatibility with the RSOuter class, but not used here.
-
-        Returns:
-            True if the segment only contains DNA bases, False otherwise.
-        """
-        return all(base in self.DNA_TO_DIGIT for base in segment)
 
 
     @override
