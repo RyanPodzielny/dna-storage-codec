@@ -135,7 +135,7 @@ class OuterCodeError(Error):
         super().__init__(f"{message}: Could not perform outer error correction on the provided sequences.")
 
 
-class MismatchSegments(OuterCodeError):
+class MismatchSegments(Error):
     """
     Error raised when both previous and payload segments are None for the same index.
     """
@@ -145,7 +145,7 @@ class MismatchSegments(OuterCodeError):
         super().__init__(message=f"{message}: Cannot perform error correction due to segment mismatches.")
 
 
-class NotEnoughPreviousSegments(OuterCodeError):
+class NotEnoughPreviousSegments(Error):
     """
     Error raised when there are not enough segments to perform error correction.
     """

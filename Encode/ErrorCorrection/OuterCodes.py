@@ -1,6 +1,7 @@
 from abc import abstractmethod
+from functools import lru_cache
 import math
-from typing import ClassVar, Final, List, override
+from typing import Any, ClassVar, Final, List, override
 from numpy.typing import NDArray
 
 # Can't use reedsolo because it doesn't support GF(3^6) and has a max of 255 symbols. We need to encode each column of
@@ -21,6 +22,11 @@ class OuterCodes():
         pass
 
 
+    @staticmethod
+    def align_payload_length(payload_length: int) -> int:
+        raise NotImplementedError()
+
+
     @abstractmethod
     def calculate_total_strands(self, payload_strands: int) -> int:
         raise NotImplementedError()
@@ -37,10 +43,6 @@ class OuterCodes():
 
     @abstractmethod
     def perform_correction(self, previous_sequences: List[str], encoded_sequences: List[str | None]) -> List[str | None]:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def get_addtional_strands(self) -> int:
         raise NotImplementedError()
 
 
@@ -115,23 +117,24 @@ class RSOuter(OuterCodes):
         # Redundancy is measured relative to data strands, not the complete codeword.
         self.payload_per_block: int = int(self.MAX_BLOCK_STRANDS / (1 + redundancy_percentage))
         self.parity_per_block: int = self.MAX_BLOCK_STRANDS - self.payload_per_block
+        self.rs: galois.ReedSolomon = self._get_rs(self.payload_per_block, self.parity_per_block)
 
         self.num_blocks: int = 0
 
-        # We cache the Reed-Solomon code for each parity_strands value to avoid reinitializing it multiple times. It 
-        #   takes so long (usually seconds) so we are just going to lazy load it when we need it. Imagine multiple runs
-        #   of the same parity_strands value, we don't want to reinitialize it every time.
-        cache_key: tuple[int, int] = (self.GF_ORDER, self.parity_per_block)
-        self.rs: galois.ReedSolomon = self._RS_CACHE.get(
-            cache_key,
-            galois.ReedSolomon(
-                n=self.MAX_BLOCK_STRANDS,
-                k=self.payload_per_block,
-                field=self.GF
-            )
-        )
-        if cache_key not in self._RS_CACHE:
-            self._RS_CACHE[cache_key] = self.rs
+
+    @staticmethod
+    def align_payload_length(payload_length: int) -> int:
+        """
+        Rounds the payload length down to a multiple of COLUMN_LENGTH. Every column must be COLUMN_LENGTH bases, as
+        each parity symbol needs all COLUMN_LENGTH bases and a parity strand only has as many bases as the payload.
+
+        Args:
+            payload_length: The number of bases available for the payload.
+
+        Returns:
+            The payload length rounded down to a multiple of COLUMN_LENGTH.
+        """
+        return payload_length - (payload_length % RSOuter.COLUMN_LENGTH)
 
 
     @staticmethod
@@ -147,6 +150,93 @@ class RSOuter(OuterCodes):
         """
 
         return int("".join(str(trit) for trit in trits), 3)
+    
+
+    def _get_rs(self, payload_count: int, parity_count: int) -> galois.ReedSolomon:
+        """
+        Returns the Reed-Solomon code for a block with the given number of parity strands. Full blocks use
+        (MAX_BLOCK_STRANDS, payload_per_block), the last block may be smaller with its own reduced parity count.
+
+        Galois can only build codes where n divides GF_ORDER - 1, so a smaller block uses the full length code with
+        n - k = parity_count, shortened. Galois shortens automatically when given fewer than k message symbols (or a
+        codeword shorter than n), so payload_count only needs to fit.
+
+        We cache the Reed-Solomon code for each parity count to avoid reinitializing it multiple times. It takes so
+        long (usually seconds) so we are just going to lazy load it when we need it.
+
+        Args:
+            payload_count: The number of payload strands in the block.
+            parity_count: The number of parity strands (n - k) in the block.
+
+        Returns:
+            The Reed-Solomon code for the block.
+
+        Raises:
+            OuterCodeError: If the payload strands do not fit in the block with the given parity.
+        """
+        # Can't have more payload strands than the maximum block size minus the parity strands
+        k: int = self.MAX_BLOCK_STRANDS - parity_count
+        if payload_count > k:
+            raise OuterCodeError(
+                message=f"{payload_count} payload strands do not fit an RS block with {parity_count} parity strands"
+            )
+
+        # Add code to cache if doesn't exist yet
+        cache_key: tuple[int, int] = (self.GF_ORDER, parity_count)
+        if cache_key not in self._RS_CACHE:
+            self._RS_CACHE[cache_key] = galois.ReedSolomon(
+                n=self.MAX_BLOCK_STRANDS, 
+                k=k, 
+                field=self.GF
+            )
+
+        return self._RS_CACHE[cache_key]
+
+
+    def _parity_for_block(self, payload_count: int) -> int:
+        """
+        Returns the number of parity strands for a block with the given number of payload strands. Full blocks get
+        parity_per_block, a smaller (last) block gets parity based on the redundancy percentage.
+
+        Args:
+            payload_count: The number of payload strands in the block.
+
+        Returns:
+            The number of parity strands for the block.
+        """
+        # When payload is at least our max payload per block, use full parity
+        if payload_count >= self.payload_per_block:
+            return self.parity_per_block
+
+        # Otherwise calculate parity based on the redundancy and round up to ensure we have enough parity strands
+        return math.ceil(payload_count * self.redundancy_percentage)
+
+
+    def _payload_for_block(self, block_strands: int) -> int:
+        """
+        Inverse of _parity_for_block. Given the total strands in a block (payload + parity), returns how many of them
+        are payload strands. Payload strands are always first in the block, followed by the parity strands.
+
+        Args:
+            block_strands: The total number of strands (payload + parity) in the block.
+
+        Returns:
+            The number of payload strands in the block.
+
+        Raises:
+            OuterCodeError: If no payload count produces the given block size.
+        """
+        if block_strands >= self.MAX_BLOCK_STRANDS:
+            return self.payload_per_block
+
+        # The payload + parity is strictly increasing in payload, so there is at most one match
+        for payload_count in range(block_strands, 0, -1):
+            if payload_count + self._parity_for_block(payload_count) == block_strands:
+                return payload_count
+
+        raise OuterCodeError(
+            message=f"No payload count produces an RS block of {block_strands} strands"
+        )
 
 
     def _validate_segments(self,
@@ -208,31 +298,34 @@ class RSOuter(OuterCodes):
     def _dna_to_field_symbol(self, dna_sequence: str, previous_base: str) -> int:
         """
         Converts one Goldman-encoded DNA column into a GF(3^6) symbol.
+
+        Args:
+            dna_sequence: The DNA sequence to be converted into a field symbol.
+            previous_base: The previous base to be used for the DNA sequence.
+
+        Returns:
+            The GF(3^6) symbol corresponding to the DNA sequence.
         """
-        trits: List[int] = [
-            int(trit)
-            for trit in Goldman().dna_to_trit(dna_sequence, previous_base)
-        ]
-        trits.extend([0] * (self.COLUMN_LENGTH - len(trits)))
+        trits: List[int] = []
+        for trit in Goldman().dna_to_trit(dna_sequence, previous_base):
+            trits.append(int(trit))
+
         return self.trits_to_field_symbol(trits)
 
 
     @staticmethod
-    def _field_symbol_to_dna(symbol: int, length: int, previous_base: str) -> str:
+    def _field_symbol_to_dna(symbol: int, previous_base: str) -> str:
         """
         Converts one GF(3^6) parity symbol back into Goldman-encoded DNA.
 
         Args:
             symbol: The GF(3^6) parity symbol to be converted back into DNA.
-            length: The length of the DNA sequence to be returned. This is used to ensure that the DNA sequence is the 
-                same length as the original column, which may be less than 6 bases.
             previous_base: The previous base to be used for the DNA sequence.
 
         Returns:
             The DNA sequence corresponding to the GF(3^6) parity symbol.
 
         Raises:
-            ValueError: If length symbol is less than 0.
             EncodingError: If the Goldman mapping fails to convert trits to DNA bases - happens when there's a 
                 homopolymer.
         """
@@ -240,7 +333,7 @@ class RSOuter(OuterCodes):
             decimal=symbol,
             width=RSOuter.COLUMN_LENGTH
         )
-        dna_sequence: str = Goldman().trit_to_dna(trits, previous_base)[:length]
+        dna_sequence: str = Goldman().trit_to_dna(trits, previous_base)
 
         return dna_sequence
 
@@ -375,20 +468,13 @@ class RSOuter(OuterCodes):
 
         parity_strands: List[str] = []
 
-        # Ensure that if we only have 1 block, with less than the payload_per_block, we adjust the payload_per_block to
-        #   match the actual number of payload strands
-        payload_per_block: int = self.payload_per_block
-        if len(payload_sequences) < self.payload_per_block:
-            payload_per_block = len(payload_sequences)
-
-        parity_per_block: int = self.parity_per_block
-
         previous_blocks, payload_blocks = self._segment_to_blocks(previous_sequences, payload_sequences)
         for previous_block, payload_block in zip(previous_blocks, payload_blocks):
-            # If our current block is smaller than parity_per_block, we want to adjust our parity_per_block to be the 
-            #   same as the redundancy percentage for that block.
-            if len(payload_block) < self.parity_per_block:
-                parity_per_block = math.ceil(len(payload_block) * self.redundancy_percentage)
+            # The last block may not be full, so it gets parity based on the redundancy percentage and its own
+            #   shortened RS code. Its parity strands sit directly after its payload strands, not at payload_per_block
+            payload_count: int = len(payload_block)
+            parity_per_block: int = self._parity_for_block(payload_count)
+            rs: galois.ReedSolomon = self._get_rs(payload_count, parity_per_block)
 
             # Get our columns for this block, which is a all the GF symbols - if we got none we got a problem
             columns: List[List[galois.FieldArray]] = self._retrieve_columns(
@@ -404,25 +490,18 @@ class RSOuter(OuterCodes):
             # We need to keep track of the last base - currently its all the indexes (we assume)
             parity_previous_bases: List[str] = []
             for index in range(parity_per_block):
-                parity_previous_bases.append(previous_block[payload_per_block + index][-1])
+                parity_previous_bases.append(previous_block[payload_count + index][-1])
         
-            for column_index, column in enumerate(columns):
-                # Preserve the actual payload length when the final column is shorter than six bases
-                column_length: int = min(
-                    RSOuter.COLUMN_LENGTH,
-                    len(payload_block[0]) - column_index * RSOuter.COLUMN_LENGTH
-                )
-
+            for column in columns:
                 # RS returns one field symbol for each parity strand for this column
-                parity_column: galois.FieldArray = self.rs.encode(self.GF(column), output="parity")
+                parity_column: galois.FieldArray = rs.encode(self.GF(column), output="parity")
 
                 # We need to convert each parity symbol back into DNA bases and add them to corresponding parity strand
                 for parity_index in range(parity_per_block):
                     # Convert to a usable int based on the field
                     parity_sequence: str = self._field_symbol_to_dna(
                         symbol=int(parity_column[parity_index]),
-                        previous_base=parity_previous_bases[parity_index],
-                        length=column_length
+                        previous_base=parity_previous_bases[parity_index]
                     )
 
                     parity_block[parity_index] += parity_sequence
@@ -460,7 +539,71 @@ class RSOuter(OuterCodes):
         return erasure_mask
 
 
-    def perform_correction(self, 
+    def _fill_erasures(self,
+                       rs: galois.ReedSolomon,
+                       codewords: galois.FieldArray,
+                       erasure_mask: List[bool]) -> galois.FieldArray | None:
+        """
+        Fills in the erased symbols of every column in a block at once. Galois' decoder is very very slow whenever
+        there is an erasure, but when we only have erasures (the other strands passed the checksum) we can solve for the
+        missing symbols directly. Basically, every column has its erasures at the same strands, so all columns are 
+        solved in one call.
+
+        Args:
+            rs: The Reed-Solomon code for the block.
+            codewords: The (columns, block_strands) symbols of the block, erased symbols can be anything.
+            erasure_mask: True for each strand that is erased.
+
+        Returns:
+            The codewords with the erased symbols filled in, or None if there are more erasures than parity strands.
+        """
+        # Positions (strands) of the erased and known symbols - needs to be numpy arrays for indexing
+        erased: NDArray[np.int_] = np.flatnonzero(erasure_mask)
+        known: NDArray[np.int_] = np.flatnonzero(np.logical_not(erasure_mask))
+
+        # Nothing to fill
+        if erased.size == 0:
+            return codewords
+
+        # Each parity strand gives one equation, so we can't solve for more erasures than we have parity
+        if erased.size > rs.n - rs.k:
+            return None
+
+        # Galois computes H (the parity-check matrix) once per RS code. A shortened (last) block drops its leading 
+        #   message positions, so it uses the last block_strands columns of H. Keeping one row/equation per erasure
+        block_strands: int = codewords.shape[1]
+        parity_check: galois.FieldArray = self.GF(rs.H[:erased.size, -block_strands:])
+
+        # Each row of H is one check (equation) that a valid codeword passes: multiply every strand's symbol by that
+        #   row's number for the strand, add them all up, and the total is always 0. For example, with 4 strands where
+        #   strand 2 is erased (x) and one check row [h0, h1, h2, h3]:
+        #       h0*s0 + h1*s1 + h2*x + h3*s3 = 0
+        #   We know s0, s1 and s3, so we can add up their part now and move it to the other side:
+        #       h2*x = -(h0*s0 + h1*s1 + h3*s3)
+        #   This line computes that righ hand side, the "-(h0*s0 + h1*s1 + h3*s3)", for every check row and every
+        #   column at once. matmul does the multiply and add for us (in GF(3^6) math, not normal integer math). The
+        #   codewords are transposed (.T) because matmul pairs each row of the first matrix with each column of the
+        #   second, so the strands of each codeword need to run down a column to line up with the strands in H's rows.
+        #   The result is a (erasures, columns) table: one total per check, per codeword column.
+        right_side: galois.FieldArray = -np.matmul(parity_check[:, known], codewords[:, known].T)
+
+        # Now we have one equation per check with only the erased symbols unknown, e.g. with 2 erasures (x, y):
+        #       a*x + b*y = r0
+        #       c*x + d*y = r1
+        #   where a, b, c, d are H's numbers for the erased strands and r0, r1 come from right_side. Same number of
+        #   equations as unknowns, so like solving a system of equations in algebra, there is exactly one answer, and
+        #   that answer is the missing symbols. solve does this for every column at once, giving a (erasures, columns)
+        #   table of the erased symbols. Wrapped in self.GF to make sure the result stays a field array.
+        erased_symbols: galois.FieldArray = self.GF(np.linalg.solve(parity_check[:, erased], right_side))
+
+        # Put the found symbols back into the erased positions (transposed back to one row per codeword column)
+        filled: galois.FieldArray = codewords.copy()
+        filled[:, erased] = erased_symbols.T
+
+        return filled
+
+
+    def perform_correction(self,
                            previous_sequences: List[str], 
                            encoded_sequences: List[str | None] ) -> List[str | None]:
         """
@@ -495,9 +638,6 @@ class RSOuter(OuterCodes):
         # Some sequences we may not be able to correct, unlikely. Returning None means those sequences are forever lost
         corrected_sequences: List[str | None] = []
 
-        # Should remain true for all blocks
-        payload_length: int = self._retrieve_payload_length(encoded_sequences)
-
         # Go through each block and correct one at at time, ending block (likely not full) will be handled the same
         for block_start in range(0, len(encoded_sequences), self.MAX_BLOCK_STRANDS):
             # Get the block of previous sequences and encoded sequences for this RS block
@@ -513,40 +653,45 @@ class RSOuter(OuterCodes):
                 error_on_none=False
             )
 
-            # Adjust based on the actual payload length (our last block may not be full) like we do in add_redundancy.
-            #   Where we get the parity_per_block based on the redundancy percentage for this block if it is smaller 
-            #   than the configured
-            parity_per_block: int = self.parity_per_block
-            if len(payload_block) < self.parity_per_block:
-                parity_per_block = math.ceil(len(payload_block) * self.redundancy_percentage)
-
-            # output="message" returns only the data symbols, so account for it
-            data_count: int = max(0, len(payload_block) - parity_per_block)
+            # Our last block may not be full. The block here holds payload + parity, so recover how many are payload
+            #   the same way add_redundancy sized it, and use the matching shortened RS code
+            data_count: int = self._payload_for_block(len(payload_block))
+            parity_per_block: int = len(payload_block) - data_count
+            rs: galois.ReedSolomon = self._get_rs(data_count, parity_per_block)
+            
             corrected_block: List[str] = [""] * data_count
             block_failed: bool = False
 
+            # Fill the erasures of every column at once. The strands that aren't None passed the checksum, so this is
+            #   almost always enough
+            filled: galois.FieldArray | None = self._fill_erasures(
+                rs=rs, 
+                codewords=self.GF(np.array(columns)), 
+                erasure_mask=erasure_mask
+            )
+
             for column_index, column in enumerate(columns):
-                # Preserve the actual payload length when the final column is shorter than six bases
-                column_length: int = min(
-                    RSOuter.COLUMN_LENGTH,
-                    payload_length - column_index * RSOuter.COLUMN_LENGTH
-                )
-
-                # RS returns one field symbol for each parity strand for this column
+                # Take the filled column if it is a valid codeword
                 corrected_column: galois.FieldArray
-                errors: NDArray[np.int_] | int
-                corrected_column, errors = self.rs.decode(
-                    codeword=self.GF(column),
-                    erasures=np.array(erasure_mask),
-                    output="message",
-                    errors=True
-                )
+                if filled is not None and not rs.detect(filled[column_index]):
+                    corrected_column = self.GF(filled[column_index][:data_count])
 
-                # Galois reports an undecodable column with errors == -1. Goldman decoding is stateful across columns, 
-                #   so no later column can make a complete DNA strand valid after this point
-                if isinstance(errors, int) and errors == -1:
-                    block_failed = True
-                    break
+                # Couldn't fill it or the filled column is not a valid codeword, so we have to decode it. 
+                #   This is very slow, but we have no choice
+                else:
+                    errors: NDArray[np.int_] | int
+                    corrected_column, errors = rs.decode(
+                        codeword=self.GF(column),
+                        erasures=np.array(erasure_mask),
+                        output="message",
+                        errors=True
+                    )
+
+                    # Galois reports an undecodable column with errors == -1. Goldman decoding is stateful across
+                    #   columns, so no later column can make a complete DNA strand valid after this point
+                    if isinstance(errors, int) and errors == -1:
+                        block_failed = True
+                        break
 
                 # We need to convert each corrected symbol back into DNA bases and add them to corresponding payload 
                 #   strand. The last strand may not be uniform with the data capacity.
@@ -560,8 +705,7 @@ class RSOuter(OuterCodes):
                     # Convert corrected symbol back to DNA bases
                     corrected_sequence: str = self._field_symbol_to_dna(
                         symbol=int(corrected_column[payload_index]),
-                        previous_base=previous_base,
-                        length=column_length
+                        previous_base=previous_base
                     )
 
                     corrected_block[payload_index] += corrected_sequence
@@ -593,15 +737,18 @@ class RSOuter(OuterCodes):
 
         # Update the number of blocks based on the payload strands and payload per block. This is used to calculate the 
         #   total number of strands after adding parity.
-        blocks: int = (payload_strands + self.payload_per_block - 1) // self.payload_per_block
-        self.num_blocks = blocks
+        full_blocks: int = payload_strands // self.payload_per_block
+        remainder: int = payload_strands % self.payload_per_block
+        self.num_blocks = full_blocks
+        if remainder > 0:
+            self.num_blocks = full_blocks + 1
+            
+        # Blocks are packed back to back, so a smaller last block only takes its payload plus its reduced parity
+        total_strands: int = full_blocks * self.MAX_BLOCK_STRANDS
+        if remainder:
+            total_strands += remainder + self._parity_for_block(remainder)
 
-        # If the payload strands is less than the payload_per_block, we will only have one block, so we need to ensure 
-        #   that we return the correct total number of strands for that block
-        if payload_strands < self.payload_per_block:
-            return payload_strands + self.parity_per_block
-
-        return blocks * self.MAX_BLOCK_STRANDS
+        return total_strands
 
 
     def select_payload_indices(self, indices: List[str]) -> List[str]:
@@ -626,7 +773,6 @@ class RSOuter(OuterCodes):
         payload_indices: List[str] = []
         for block_start in range(0, len(indices), self.MAX_BLOCK_STRANDS):
             block: List[str] = indices[block_start:block_start + self.MAX_BLOCK_STRANDS]
-
 
             # Add the first payload_per_block indices from the block to the payload_indices list
             payload_indices += block[:self.payload_per_block]
@@ -669,7 +815,7 @@ class DirectDNARSOuter(RSOuter):
     @override
     def _dna_to_field_symbol(self, dna_sequence: str, *args, **kwargs) -> int:
         """
-        Converts up to six arbitrary DNA bases into one GF(4^6) symbol.
+        Converts six arbitrary DNA bases into one GF(4^6) symbol.
 
         Args:
             dna_sequence: The DNA bases to be converted into a GF(4^6) symbol.
@@ -682,22 +828,17 @@ class DirectDNARSOuter(RSOuter):
         for base in dna_sequence:
             symbol = symbol * 4 + self.DNA_TO_DIGIT[base]
 
-        for _ in range(self.COLUMN_LENGTH - len(dna_sequence)):
-            symbol *= 4
-
         return symbol
 
 
     @override
-    def _field_symbol_to_dna(self, symbol: int, length: int, *args, **kwargs) -> str:
+    def _field_symbol_to_dna(self, symbol: int, *args, **kwargs) -> str:
         """
         Converts one GF(4^6) data symbol back into DNA bases. Essientaly 'quits' or qubits? to decimal. Only used for
         data strands, parity strands go through _symbols_to_parity_dna.
 
         Args:
             symbol: The GF(4^6) symbol to be converted back into DNA.
-            length: The length of the DNA sequence to be returned. This is used to ensure that the DNA sequence is the
-                same length as the original column.
             *args and **kwargs, used to maintain compatibility
 
         Returns:
@@ -710,4 +851,4 @@ class DirectDNARSOuter(RSOuter):
             # Prepend each least-significant base so the final sequence stays in its original left-to-right order.
             bases = self.DIGIT_TO_DNA[digit] + bases
 
-        return bases[:length]
+        return bases

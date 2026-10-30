@@ -142,7 +142,7 @@ class Encoding:
 
 
     @abstractmethod
-    def decode_segments(self, data: list[str], *args, **kwargs) -> str:
+    def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
         raise NotImplementedError()
 
 
