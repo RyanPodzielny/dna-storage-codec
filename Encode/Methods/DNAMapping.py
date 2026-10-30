@@ -13,10 +13,12 @@ from Encode.Methods.HuffmanCoding import Huffman
 
 
 class DNAMap(Encoding):
-    # Null chracter used to pad oligos for DNAMap where a empty string cannot be represenented
-    CHUNKING_PADDING_CHAR: Final[str] = '\x00' 
-    # For normal encoding without segmenting (sepfically for Huffman) chance we have odd bits, so need to add 1 oon
-    FINAL_PADDING_CHAR: Final[str] = '0'
+    """
+    The DNAMap class provides methods to encode binary strings into DNA sequences and decode DNA sequences back into
+    binary strings. It uses a simple mapping of binary pairs to DNA bases, where '00' maps to 'A', '01' maps to 'C',
+    '10' maps to 'G', and '11' maps to 'T'.
+    """
+
 
     def __init__(self) -> None:
         super().__init__()
@@ -25,6 +27,26 @@ class DNAMap(Encoding):
         self.BIT_MULTIPLIER = 2
         
         self.ESTIMATED_BASES_PER_BYTE: float = 4.0 
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    # Null chracter used to pad oligos for DNAMap where a empty string cannot be represenented
+    CHUNKING_PADDING_CHAR: Final[str] = '\x00' 
+    # For normal encoding without segmenting (sepfically for Huffman) chance we have odd bits, so need to add 1 oon
+    FINAL_PADDING_CHAR: Final[str] = '0'
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @override
@@ -46,6 +68,13 @@ class DNAMap(Encoding):
         """
         json: dict[str, Any] = Encoding.read_json_table(json_path)
         return json[Encoding.ENCODED_DATA], json[Encoding.HAS_SINGLE_PADDING]
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @override
@@ -107,6 +136,13 @@ class DNAMap(Encoding):
             binary_segments.append(binary_segment)
 
         return binary_segments
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @override
@@ -388,7 +424,15 @@ class DNAMap(Encoding):
         return (encoded_size, table_size + 1)
 
 
+
 class DNAMapHuffman(DNAMap):
+    """
+    The DNAMapHuffman class extends the DNAMap class to provide methods for encoding and decoding binary strings into 
+    DNA sequences using Huffman coding for compression. It combines the functionality of both DNAMap and Huffman coding 
+    to achieve efficient encoding and decoding of data.
+    """
+
+
     def __init__(self) -> None:
         """
         Initializes the DNAMapHuffman class.
@@ -396,7 +440,14 @@ class DNAMapHuffman(DNAMap):
         super().__init__()
 
         self.ESTIMATED_BASES_PER_BYTE: float = 2.6
-    
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
 
     @override
     @staticmethod
@@ -417,6 +468,13 @@ class DNAMapHuffman(DNAMap):
         """
         json: dict[str, Any] = Encoding.read_json_table(json_path)
         return json[Encoding.ENCODED_DATA], json[Encoding.HUFFMAN_CODES], json[Encoding.HAS_SINGLE_PADDING]
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @override

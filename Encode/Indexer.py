@@ -12,7 +12,13 @@ from Encode.Helpers.Errors import EncodingError, MaxRunLengthError, RankError, U
 from Encode.Methods.HuffmanCoding import Goldman, Huffman
 from Encode.Methods.Encoding import Encoding
 
+
 class Indexer:
+    """
+    Abstract base class for indexing DNA sequences.
+
+    This class provides a framework for creating different types of indexers for DNA sequences.
+    """
     def __init__(self, width: int, *args: Any, **kwargs: Any):
         """
         Initializes the Indexer the width of the index sequence.
@@ -28,13 +34,13 @@ class Indexer:
         self.max_run_length: int = 1  
 
 
-    @abstractmethod
-    def calculate_total_valid_indices(self) -> int:
+    @staticmethod
+    def determine_optimal_width(required_capacity: int, *args: Any, **kwargs: Any) -> int:
         raise NotImplementedError()
 
 
-    @staticmethod
-    def determine_optimal_width(required_capacity: int, *args: Any, **kwargs: Any) -> int:
+    @abstractmethod
+    def calculate_total_valid_indices(self) -> int:
         raise NotImplementedError()
 
 
@@ -48,7 +54,14 @@ class Indexer:
         raise NotImplementedError()
 
 
+
 class DNAMapIndexer(Indexer):
+    """
+    Standard DNA mapping indexer that uses a simple 2-bit representation for each base (A, C, G, T). This indexer does 
+    not have a maximum run length constraint, meaning it can generate index sequences with homopolymer runs of any 
+    length.
+    """
+
     def __init__(self, width: int, *args: Any, **kwargs: Any):
         """
         Initializes the DNAMapIndexer with the width of the index sequence.
@@ -63,15 +76,11 @@ class DNAMapIndexer(Indexer):
         self.max_run_length = -1
 
 
-    @override
-    def calculate_total_valid_indices(self) -> int:
-        """
-        Calculates the total number of valid index sequences for the DNAMap indexing scheme.
-
-        Returns:
-            The total number of valid index sequences.
-        """
-        return 4 ** self.width
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @override
@@ -110,6 +119,49 @@ class DNAMapIndexer(Indexer):
 
         return width
 
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    def unrank(self, index: int, *args: Any, **kwargs: Any) -> str:
+        """
+        Generates the index sequence corresponding to a given rank based on the DNA mapping indexing scheme.
+
+        Args:
+            index: The rank of the index sequence to generate.
+            Args and kwargs are included for polymorphism, but unused
+            
+        Returns:
+            The index sequence corresponding to the given rank.
+
+        Raises:
+            ValueError: If the index is negative or exceeds the maximum value for the given width.
+            UnrankError: If the generated index sequence length does not match the expected width.
+        """
+        if self.width <= 0:
+            raise ValueError("Width must be a positive integer.")
+
+        # Convert the decimal index to a binary string with correct leading zeros (need x2 as each base is 2 bits)
+        binary_string: str = f"{index:0{self.width * 2}b}"
+        if len(binary_string) > self.width * 2:
+            raise UnrankError(
+                message="Could not unrank index sequence!",      
+                index=index, 
+                capacity=self.calculate_total_valid_indices()
+            )
+
+        # Map the binary string to DNA bases using the DNAMap scheme
+        unrank: str = ""
+        for index in range(0, len(binary_string), 2):
+            unrank += Encoding.DNA_MAP[binary_string[index:index + 2]]
+
+        return unrank
+    
 
     @override
     def rank(self, index_sequence: str, *args: Any, **kwargs: Any) -> int:
@@ -154,42 +206,22 @@ class DNAMapIndexer(Indexer):
 
 
     @override
-    def unrank(self, index: int, *args: Any, **kwargs: Any) -> str:
+    def calculate_total_valid_indices(self) -> int:
         """
-        Generates the index sequence corresponding to a given rank based on the DNA mapping indexing scheme.
+        Calculates the total number of valid index sequences for the DNAMap indexing scheme.
 
-        Args:
-            index: The rank of the index sequence to generate.
-            Args and kwargs are included for polymorphism, but unused
-            
         Returns:
-            The index sequence corresponding to the given rank.
-
-        Raises:
-            ValueError: If the index is negative or exceeds the maximum value for the given width.
-            UnrankError: If the generated index sequence length does not match the expected width.
+            The total number of valid index sequences.
         """
-        if self.width <= 0:
-            raise ValueError("Width must be a positive integer.")
+        return 4 ** self.width
 
-        # Convert the decimal index to a binary string with correct leading zeros (need x2 as each base is 2 bits)
-        binary_string: str = f"{index:0{self.width * 2}b}"
-        if len(binary_string) > self.width * 2:
-            raise UnrankError(
-                message="Could not unrank index sequence!",      
-                index=index, 
-                capacity=self.calculate_total_valid_indices()
-            )
-
-        # Map the binary string to DNA bases using the DNAMap scheme
-        unrank: str = ""
-        for index in range(0, len(binary_string), 2):
-            unrank += Encoding.DNA_MAP[binary_string[index:index + 2]]
-
-        return unrank
 
 
 class GoldmanIndexer(Indexer):
+    """
+    An indexer that uses the Goldman indexing scheme. This scheme is designed to avoid homopolymer runs in DNA 
+    sequences, which can cause issues in sequencing and synthesis.
+    """
     def __init__(self, width: int, *args: Any, **kwargs: Any):
         """
         Initializes the GoldmanIndexer with the number of oligos and the width of the index sequence.
@@ -202,6 +234,13 @@ class GoldmanIndexer(Indexer):
         # Goldman indexing does not allow homopolymer runs longer than 1
         self.max_run_length: int = 1  
 
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+    
 
     @staticmethod
     def decimal_to_trit(decimal: int, width: int) -> str:
@@ -252,28 +291,7 @@ class GoldmanIndexer(Indexer):
             decimal = decimal * 3 + int(digit)
         return decimal
 
-
-    @override
-    def calculate_total_valid_indices(self) -> int:
-        """
-        Calculates the total number of valid index sequences that can be generated given the before and after 
-        sequences, using worst case scenario for homopolymer runs.
-
-        Returns:
-            The total number of valid index sequences.
-
-        Raises:
-            ValueError: If the width is not a positive integer.
-        """
-        if self.width <= 0:
-            raise ValueError("Width must be a positive integer.")
-
-        # For Goldman indexing, the total number of valid indices is simply 3^width, since each position in the index
-        #   sequence can be one of three bases (A, C, G) and we are not considering homopolymer runs in this calculation.
-        total_valid_indices: int = 3 ** self.width
-        return total_valid_indices
     
-
     @override
     @staticmethod
     def determine_optimal_width(required_capacity: int, *args, **kwargs) -> int:
@@ -297,6 +315,34 @@ class GoldmanIndexer(Indexer):
         #   width = ceil(log3(required_capacity))
         width: int = math.ceil(math.log(required_capacity, 3))
         return width
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    def calculate_total_valid_indices(self) -> int:
+        """
+        Calculates the total number of valid index sequences that can be generated given the before and after 
+        sequences, using worst case scenario for homopolymer runs.
+
+        Returns:
+            The total number of valid index sequences.
+
+        Raises:
+            ValueError: If the width is not a positive integer.
+        """
+        if self.width <= 0:
+            raise ValueError("Width must be a positive integer.")
+
+        # For Goldman indexing, the total number of valid indices is simply 3^width, since each position in the index
+        #   sequence can be one of three bases (A, C, G) and we are not considering homopolymer runs in this calculation.
+        total_valid_indices: int = 3 ** self.width
+        return total_valid_indices
 
 
     @override
@@ -375,12 +421,12 @@ class GoldmanIndexer(Indexer):
 
 
 class EnumerativeIndexer(Indexer):
-    ORDERED_ALPHABET: Final[tuple[str, ...]] = ('A', 'C', 'G', 'T')
-    VALID_NUM: Final[int] = len(ORDERED_ALPHABET)
-
-    # Arbitrary limit to prevent infinite loops in determine_optimal_width
-    REASONABLE_WIDTH_LIMIT: Final[int] = 50  
-
+    """
+    An indexer that uses enumerative indexing to avoid homopolymer runs in DNA sequences. This scheme is designed to
+    avoid homopolymer runs in DNA sequences, which can cause issues in sequencing and synthesis. The enumerative
+    indexing scheme is more complex than the Goldman scheme, but it allows for more flexibility in the design of the
+    index sequences - where both previous and after sequences can be considered for homopolymer runs. 
+    """
 
     def __init__(self, width: int, max_run_length: int = 1):
         """
@@ -396,6 +442,72 @@ class EnumerativeIndexer(Indexer):
         """
         super().__init__(width)
         self.max_run_length: int = max_run_length
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    ORDERED_ALPHABET: Final[tuple[str, ...]] = ('A', 'C', 'G', 'T')
+    VALID_NUM: Final[int] = len(ORDERED_ALPHABET)
+
+    # Arbitrary limit to prevent infinite loops in determine_optimal_width
+    REASONABLE_WIDTH_LIMIT: Final[int] = 50  
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    @staticmethod
+    def determine_optimal_width(required_capacity: int, *, max_run_length: int = 1) -> int:
+        """
+        Determines the minimum width of the index sequence required to uniquely identify a given number of oligos, 
+        considering the maximum allowed homopolymer run length.
+        
+        Args:
+            required_capacity: The number of oligos to index (or just just numbers to support in general).
+            max_run_length: The maximum allowed homopolymer run length.
+
+        Returns:
+            The optimal width of the index sequence.
+
+        Raises:
+            ValueError: If the required capacity is not a positive integer.
+            RuntimeError: If the optimal width cannot be determined within reasonable bounds (width > 50).
+        """
+        if required_capacity <= 0:
+            raise ValueError("Required capacity must be a positive integer.")
+
+        # Start with a width of 1 and increment until we find a width that can accommodate the number of oligos
+        width: int = 1
+        indexer = EnumerativeIndexer(width, max_run_length=max_run_length)
+        while True:
+            total_valid_indices: int = indexer.calculate_total_valid_indices()
+
+            # Found a width that can accommodate the number of oligos, return it
+            if total_valid_indices >= required_capacity:
+                return width
+            width += 1
+            indexer.width = width
+
+            # Prevent infinite loop
+            if width > EnumerativeIndexer.REASONABLE_WIDTH_LIMIT:  
+                raise RuntimeError("Unable to determine optimal width within reasonable bounds.")
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     def _run_length(self, sequence: str, reverse: bool) -> int:
@@ -524,67 +636,12 @@ class EnumerativeIndexer(Indexer):
         return valids 
 
 
-    def calculate_total_valid_indices(self) -> int:
-        """
-        Calculates the total number of valid index sequences that can be generated given the before and after 
-        sequences, using worst case scenario for homopolymer runs.
-
-        Returns:
-            The total number of valid index sequences.
-        """
-        before_run: int = self.max_run_length
-        after_run: int = self.max_run_length
-
-        # Calculate the total number of valid indices for the current width, assumes before and after are of 
-        #   length 1, which is the worst case scenario for homopolymer runs
-        total_valid_indices: int = self._num_valid_placements(
-            self.width,                    
-            True,
-            before_run,                    
-            after_run                    
-        )
-
-        return total_valid_indices
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
     
-
-    @override
-    @staticmethod
-    def determine_optimal_width(required_capacity: int, *, max_run_length: int = 1) -> int:
-        """
-        Determines the minimum width of the index sequence required to uniquely identify a given number of oligos, 
-        considering the maximum allowed homopolymer run length.
-        
-        Args:
-            required_capacity: The number of oligos to index (or just just numbers to support in general).
-            max_run_length: The maximum allowed homopolymer run length.
-
-        Returns:
-            The optimal width of the index sequence.
-
-        Raises:
-            ValueError: If the required capacity is not a positive integer.
-            RuntimeError: If the optimal width cannot be determined within reasonable bounds (width > 50).
-        """
-        if required_capacity <= 0:
-            raise ValueError("Required capacity must be a positive integer.")
-
-        # Start with a width of 1 and increment until we find a width that can accommodate the number of oligos
-        width: int = 1
-        indexer = EnumerativeIndexer(width, max_run_length=max_run_length)
-        while True:
-            total_valid_indices: int = indexer.calculate_total_valid_indices()
-
-            # Found a width that can accommodate the number of oligos, return it
-            if total_valid_indices >= required_capacity:
-                return width
-            width += 1
-            indexer.width = width
-
-            # Prevent infinite loop
-            if width > EnumerativeIndexer.REASONABLE_WIDTH_LIMIT:  
-                raise RuntimeError("Unable to determine optimal width within reasonable bounds.")
-
-
 
     def rank(self, index_sequence: str, *, before_sequence: str, after_sequence: str, ignore_run_length: bool = False) -> int:
         """
@@ -765,3 +822,26 @@ class EnumerativeIndexer(Indexer):
                 index -= block
 
         return index_sequence
+
+
+    def calculate_total_valid_indices(self) -> int:
+        """
+        Calculates the total number of valid index sequences that can be generated given the before and after 
+        sequences, using worst case scenario for homopolymer runs.
+
+        Returns:
+            The total number of valid index sequences.
+        """
+        before_run: int = self.max_run_length
+        after_run: int = self.max_run_length
+
+        # Calculate the total number of valid indices for the current width, assumes before and after are of 
+        #   length 1, which is the worst case scenario for homopolymer runs
+        total_valid_indices: int = self._num_valid_placements(
+            self.width,                    
+            True,
+            before_run,                    
+            after_run                    
+        )
+
+        return total_valid_indices

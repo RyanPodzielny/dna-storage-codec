@@ -17,18 +17,9 @@ from Encode.Helpers.PriorityQueue import PriorityQueue
 
 
 class Huffman(Encoding):
-    # Order for tree when Huffman is binary
-    BINARY_ORDER: Final[tuple[str, ...]] = ('0', '1')
-    # For converting into trits
-    GOLDMAN_ORDER: Final[tuple[str, ...]] = ('0', '1', '2')
-    # Order for tree when Huffman has more than up to 4 children
-    TREE_ORDER: Final[tuple[str, ...]] = ('A', 'C', 'G', 'T')
-    # Certain methods require a starting base to not have homopolymers
-    START_BASE: Final[str] = 'A'
-
-    # Character used to pad oligos, needs to be added to trees (preferred over null bytes as nothing is encoded)
-    CHUNKING_PADDING_CHAR: Final[str] = '' 
-
+    """
+    A class for performing Huffman coding on input data.
+    """
 
     def __init__(self) -> None:
         """
@@ -50,6 +41,58 @@ class Huffman(Encoding):
 
         self.ESTIMATED_BASES_PER_BYTE: float = 2.6
 
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+    # Order for tree when Huffman is binary
+    BINARY_ORDER: Final[tuple[str, ...]] = ('0', '1')
+    # For converting into trits
+    GOLDMAN_ORDER: Final[tuple[str, ...]] = ('0', '1', '2')
+    # Order for tree when Huffman has more than up to 4 children
+    TREE_ORDER: Final[tuple[str, ...]] = ('A', 'C', 'G', 'T')
+    # Certain methods require a starting base to not have homopolymers
+    START_BASE: Final[str] = 'A'
+
+    # Character used to pad oligos, needs to be added to trees (preferred over null bytes as nothing is encoded)
+    CHUNKING_PADDING_CHAR: Final[str] = '' 
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    @staticmethod
+    def read_json_table(json_path: str) -> tuple[str, dict[str, str]]:
+        """
+        Formats the raw Huffman table string into a dictionary mapping codes to characters.
+
+        Args:
+            json_path: The path to the JSON file containing the Huffman table.
+
+        Returns:
+            A dictionary mapping Huffman codes to their corresponding characters.
+
+        Raises:
+            FileNotFoundError: If the input file does not exist.
+            JSONError: If the JSON file is empty or does not contain the expected keys.
+        """
+        json_data = Encoding.read_json_table(json_path)
+        return json_data[Encoding.ENCODED_DATA], json_data[Encoding.HUFFMAN_CODES]
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
     def _count_frequencies(self, data: str, k: int = 1) -> dict[str, int]:
         """
@@ -223,6 +266,7 @@ class Huffman(Encoding):
         
         return segment
 
+
     def _encode_segment_payload(self,
                                 current_segment: str,
                                 encoded_substring: str,
@@ -259,6 +303,13 @@ class Huffman(Encoding):
             return ""
 
         return current_segment
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @override
@@ -388,26 +439,6 @@ class Huffman(Encoding):
         self.save_json_table(json_outpath, encoded_data, huffman_codes)
 
         return encoded_data
-
-
-    @override
-    @staticmethod
-    def read_json_table(json_path: str) -> tuple[str, dict[str, str]]:
-        """
-        Formats the raw Huffman table string into a dictionary mapping codes to characters.
-
-        Args:
-            json_path: The path to the JSON file containing the Huffman table.
-
-        Returns:
-            A dictionary mapping Huffman codes to their corresponding characters.
-
-        Raises:
-            FileNotFoundError: If the input file does not exist.
-            JSONError: If the JSON file is empty or does not contain the expected keys.
-        """
-        json_data = Encoding.read_json_table(json_path)
-        return json_data[Encoding.ENCODED_DATA], json_data[Encoding.HUFFMAN_CODES]
 
 
     @override
@@ -561,7 +592,16 @@ class Huffman(Encoding):
         return table_size
 
 
+
 class Ternary(Huffman):
+    """
+    A class for performing ternary Huffman coding on input data. This class extends the Huffman class to implement a
+    ternary version of Huffman coding, which uses three symbols (A, C, G) instead of the traditional binary symbols 
+    (0, 1). The ternary Huffman coding prevent homopolymers greater than length 2 by not allowing a child to have the 
+    same code as its parent.
+    """
+
+
     def __init__(self) -> None:
         """
         Initializes a new instance of the Huffman class. Parent base != child base.
@@ -572,6 +612,13 @@ class Ternary(Huffman):
         self.ORDER = Huffman.TREE_ORDER
 
         self.ESTIMATED_BASES_PER_BYTE: float = 3.3
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @override
@@ -629,6 +676,13 @@ class Ternary(Huffman):
         return codes
 
 
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
     @override
     def estimate_bases_per_byte(self) -> float:
         """
@@ -642,13 +696,17 @@ class Ternary(Huffman):
         return self.ESTIMATED_BASES_PER_BYTE
 
 
+
 class Quaternary(Huffman):
+    """
+    This class extends the Huffman class to implement a quaternary version of Huffman coding, which uses four symbols 
+    (A, C, G, T) instead of the traditional binary symbols (0, 1).
+    """
+
+
     def __init__(self) -> None:
         """
         Initializes a new instance of the HuffmanQuaternary class.
-
-        This class extends the Huffman class to implement a quaternary version of Huffman coding, which uses four
-        symbols (A, C, G, T) instead of the traditional binary symbols (0, 1).
         """
         super().__init__()
 
@@ -666,6 +724,13 @@ class Quaternary(Huffman):
         """
 
 
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+        
+
     @override
     def estimate_bases_per_byte(self) -> float:
         """
@@ -679,19 +744,12 @@ class Quaternary(Huffman):
 
 
 class BitScanQuaternary(Quaternary):
-    # Measured bases per byte by bit-scan length maximum, rounded up I know constants aren't great. But easiest way
-    #   to get a good estimate of the average bases per byte for each bit-scan length. They are also pretty innacurate
-    #   the larger you go (just by variance of the data) but are a good starting point to determine width. Worst case
-    #   is we need to regenerate the encoded segs with a new width if we are too innacurate with num oligos.
-    BITSCAN_BASES_PER_BYTE: Final[dict[int, float]] = {
-        4: 3.7, 5: 4.1, 6: 3.9, 7: 4.0, 8: 2.6, 9: 3.8, 10: 3.4, 11: 3.5,
-        12: 2.8, 13: 3.3, 14: 2.9, 15: 3.0, 16: 2.1, 17: 2.9, 18: 2.6, 19: 2.7,
-        20: 2.2, 21: 2.5, 22: 2.3, 23: 2.4, 24: 1.8, 25: 2.3, 26: 2.1, 27: 2.2,
-        28: 1.9, 29: 2.1, 30: 1.9, 31: 2.0, 32: 1.6, 33: 1.9, 34: 1.8, 35: 1.8,
-        36: 1.6, 37: 1.7, 38: 1.6, 39: 1.6, 40: 1.4, 41: 1.6, 42: 1.5, 43: 1.5,
-        44: 1.4, 45: 1.4, 46: 1.4, 47: 1.4, 48: 1.3, 49: 1.3, 50: 1.3, 51: 1.3,
-        52: 1.2
-    }
+    """
+    Utilizes a quaternary Huffman coding approach with a bit-scan method to encode data. This class allows for
+    scanning a specified number of bits (k) at a time, which can improve encoding efficiency but can drastically 
+    increase the size of the Huffman table.
+    """
+
 
     def __init__(self, k: int = 4) -> None:
         """
@@ -714,6 +772,35 @@ class BitScanQuaternary(Quaternary):
         self.ESTIMATED_BASES_PER_BYTE: float = max(BitScanQuaternary.BITSCAN_BASES_PER_BYTE.values())
 
 
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    # Measured bases per byte by bit-scan length maximum, rounded up I know constants aren't great. But easiest way
+    #   to get a good estimate of the average bases per byte for each bit-scan length. They are also pretty innacurate
+    #   the larger you go (just by variance of the data) but are a good starting point to determine width. Worst case
+    #   is we need to regenerate the encoded segs with a new width if we are too innacurate with num oligos.
+    BITSCAN_BASES_PER_BYTE: Final[dict[int, float]] = {
+        4: 3.7, 5: 4.1, 6: 3.9, 7: 4.0, 8: 2.6, 9: 3.8, 10: 3.4, 11: 3.5,
+        12: 2.8, 13: 3.3, 14: 2.9, 15: 3.0, 16: 2.1, 17: 2.9, 18: 2.6, 19: 2.7,
+        20: 2.2, 21: 2.5, 22: 2.3, 23: 2.4, 24: 1.8, 25: 2.3, 26: 2.1, 27: 2.2,
+        28: 1.9, 29: 2.1, 30: 1.9, 31: 2.0, 32: 1.6, 33: 1.9, 34: 1.8, 35: 1.8,
+        36: 1.6, 37: 1.7, 38: 1.6, 39: 1.6, 40: 1.4, 41: 1.6, 42: 1.5, 43: 1.5,
+        44: 1.4, 45: 1.4, 46: 1.4, 47: 1.4, 48: 1.3, 49: 1.3, 50: 1.3, 51: 1.3,
+        52: 1.2
+    }
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
     def _calculate_coding_density(self, huffman_codes: dict[str, str]) -> float:
         """
         Calculates the coding density of the encoded data.
@@ -731,6 +818,13 @@ class BitScanQuaternary(Quaternary):
         
         coding_density: float = self.K / average_code_length
         return coding_density
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @override
@@ -866,12 +960,15 @@ class BitScanQuaternary(Quaternary):
         print(f"\tK Used: {self.K}")
 
 
+
 class Pgram(Huffman):
-    # Maximum (rounded up) measured bases per byte by max p-gram length
-    PGRAM_BASES_PER_BYTE: Final[dict[int, float]] = {
-        2: 4.5, 3: 4.0, 4: 3.5, 5: 3.2, 6: 2.9, 7: 2.7, 8: 2.5, 9: 2.3,
-        10: 2.1, 11: 1.9, 12: 1.8, 13: 1.7, 14: 1.6, 15: 1.5, 16: 1.4,
-    }
+    """
+    A class for performing p-gram Huffman coding on input data. This class extends the Huffman class to implement a
+    p-gram version of Huffman coding, which uses variable-length substrings (p-grams) of the input data to create a more
+    efficient encoding. The maximum length of p-grams can be specified during initialization, allowing for flexibility 
+    in the encoding process.
+    """
+
 
     def __init__(self, m: int = 3) -> None:
         """
@@ -899,6 +996,27 @@ class Pgram(Huffman):
 
         # Will use function, placeholder
         self.ESTIMATED_BASES_PER_BYTE: float = max(Pgram.PGRAM_BASES_PER_BYTE.values())
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    # Maximum (rounded up) measured bases per byte by max p-gram length
+    PGRAM_BASES_PER_BYTE: Final[dict[int, float]] = {
+        2: 4.5, 3: 4.0, 4: 3.5, 5: 3.2, 6: 2.9, 7: 2.7, 8: 2.5, 9: 2.3,
+        10: 2.1, 11: 1.9, 12: 1.8, 13: 1.7, 14: 1.6, 15: 1.5, 16: 1.4,
+    }
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
         
 
     @override
@@ -1172,7 +1290,14 @@ class Pgram(Huffman):
                 current_code = ""
 
         return decoded_data
-    
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
 
     @override
     def encode_segments(self, 
@@ -1351,17 +1476,14 @@ class Pgram(Huffman):
         print(f"\tM Used: {self.M}")
 
 
+
 class Goldman(Huffman):
-    ROTATING_MAP: Final[dict[str, dict[str, str]]] = {
-        'A': {'0': 'C', '1': 'G', '2': 'T'},
-        'C': {'0': 'G', '1': 'T', '2': 'A'},
-        'G': {'0': 'T', '1': 'A', '2': 'C'},
-        'T': {'0': 'A', '1': 'C', '2': 'G'}
-    }
-    # Construct the complementary rotating map
-    ROTATING_MAP_COMPLEMENT: Final[dict[str, dict[str, str]]] = {}
-    for base, mapping in ROTATING_MAP.items():
-        ROTATING_MAP_COMPLEMENT[base] = {v: k for k, v in mapping.items()}
+    """
+    Class for performing Goldman's rotating tree Huffman coding on input data. This class extends the Huffman class to
+    implement a rotating tree version of Huffman coding, which uses a rotating mapping of DNA bases to create a more
+    efficient encoding. The rotating mapping is based on the previous base used in the encoding process, ensuring that
+    no homopolymers are created in the encoded DNA sequence. 
+    """
 
 
     def __init__(self) -> None:
@@ -1376,6 +1498,31 @@ class Goldman(Huffman):
 
         self.ESTIMATED_BASES_PER_BYTE: float = 3.2
 
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    ROTATING_MAP: Final[dict[str, dict[str, str]]] = {
+        'A': {'0': 'C', '1': 'G', '2': 'T'},
+        'C': {'0': 'G', '1': 'T', '2': 'A'},
+        'G': {'0': 'T', '1': 'A', '2': 'C'},
+        'T': {'0': 'A', '1': 'C', '2': 'G'}
+    }
+    # Construct the complementary rotating map
+    ROTATING_MAP_COMPLEMENT: Final[dict[str, dict[str, str]]] = {}
+    for base, mapping in ROTATING_MAP.items():
+        ROTATING_MAP_COMPLEMENT[base] = {v: k for k, v in mapping.items()}
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
     def trit_encode(self, data: str) -> str:
         """
@@ -1395,6 +1542,41 @@ class Goldman(Huffman):
         encoded_data: str = "".join(huffman_codes[char] for char in data)
 
         return encoded_data
+
+
+    def dna_to_trit(self, encoded_data: str, start_base: str = Huffman.START_BASE) -> str:
+        """
+        Maps the DNA bases back to trits using the rotating map complement based on the previous base.
+
+        Args:
+            encoded_data: The DNA data to be mapped.
+            start_base: The starting base for the mapping.
+
+        Returns:
+            The a string of the mapped trits.
+
+        Raises:
+            EncodingError: If a base is not found in the rotating map complement or if the start base is not valid.
+        """
+        trit_string: str = ""
+        # Always assume we start with the specified base
+        previous_base: str = start_base
+
+        for base in encoded_data:
+            if base not in Goldman.ROTATING_MAP_COMPLEMENT[previous_base]:
+                raise EncodingError(
+                    message=f"Base '{base}' not found in the rotating map complement for base '{previous_base}'",
+                    encoding_method=self.__class__.__name__
+                )
+
+            # Get the corresponding trit from the rotating map complement
+            trit: str = Goldman.ROTATING_MAP_COMPLEMENT[previous_base][base]
+            trit_string += trit
+
+            # Update the previous base for the next iteration
+            previous_base = base
+
+        return trit_string
 
 
     def trit_to_dna(self, trit_data: str, start_base: str = Huffman.START_BASE) -> str:
@@ -1532,41 +1714,6 @@ class Goldman(Huffman):
         encoded_message = self.trit_to_dna(encoded_message)
 
         return huffman_codes, encoded_message
-
-
-    def dna_to_trit(self, encoded_data: str, start_base: str = Huffman.START_BASE) -> str:
-        """
-        Maps the DNA bases back to trits using the rotating map complement based on the previous base.
-
-        Args:
-            encoded_data: The DNA data to be mapped.
-            start_base: The starting base for the mapping.
-
-        Returns:
-            The a string of the mapped trits.
-
-        Raises:
-            EncodingError: If a base is not found in the rotating map complement or if the start base is not valid.
-        """
-        trit_string: str = ""
-        # Always assume we start with the specified base
-        previous_base: str = start_base
-
-        for base in encoded_data:
-            if base not in Goldman.ROTATING_MAP_COMPLEMENT[previous_base]:
-                raise EncodingError(
-                    message=f"Base '{base}' not found in the rotating map complement for base '{previous_base}'",
-                    encoding_method=self.__class__.__name__
-                )
-
-            # Get the corresponding trit from the rotating map complement
-            trit: str = Goldman.ROTATING_MAP_COMPLEMENT[previous_base][base]
-            trit_string += trit
-
-            # Update the previous base for the next iteration
-            previous_base = base
-
-        return trit_string
 
 
     @override

@@ -1,5 +1,12 @@
+"""
+Module enables framing and deframing of oligos with specific sequences and lengths, including primers, checksums, and 
+error correction codes. Basically the driving class for the encoding process, it takes in a file and outputs a list of 
+oligos that can be synthesized. And the for the decoding process, it takes in a list of oligos and outputs the original 
+file content. 
+"""
+
+
 import math
-from functools import lru_cache
 from reedsolo import ReedSolomonError
 from typing import Any, Generator
 from pathlib import Path
@@ -15,8 +22,7 @@ class OligoFramer:
     """
     A class for framing oligos with specific sequences and lengths.
     """
-    # Maximum iterations for index width convergence
-    MAX_ITERATIONS: int = 32
+
 
     def __init__(self, 
                  in_path: str,
@@ -25,7 +31,6 @@ class OligoFramer:
                  encoder: Encoding, indexer: Indexer, 
                  checksum: CheckSum, 
                  inner_correction: RSInner | None = None, outer_correction: OuterCodes | None = None):
-
         """
         Initializes the OligoFramer with the given parameters.
         
@@ -85,54 +90,23 @@ class OligoFramer:
         """
         self.huffman_codes: dict[str, str] = {}
 
-    @property
-    def indexer_width(self) -> int:
-        """
-        Returns the index width for the oligos.
-        """
-        return self.indexer.width
 
-    @property
-    def total_oligos(self) -> int:
-        """
-        Returns the number of oligos needed to encode the input file.
-        """
-        return self.num_oligos
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
-    def _set_payload_length(self) -> None:
-        """
-        Sets the payload length from the width left. The outer code may need a shorter payload (RSOuter needs full
-        six-base columns), so any bases it can't use become filler between the payload and checksum. This keeps the
-        oligo length the same as requested.
-        """
-        self.payload_length = self.width_left
-        if self.outer_correction:
-            self.payload_length = self.outer_correction.align_payload_length(self.width_left)
-
-        self.filler_length = self.width_left - self.payload_length
+    # Maximum iterations for index width convergence
+    MAX_ITERATIONS: int = 32
 
 
-    def _generate_filler(self, payload_sequence: str) -> str:
-        """
-        Generates the filler bases that go after the payload. The filler holds no data, it is a fixed run of Goldman
-        zero trits so it never repeats the previous base (keeps the homopolymer constraint) and can be regenerated
-        from the payload alone during decoding.
-
-        Args:
-            payload_sequence: The payload sequence the filler follows.
-
-        Returns:
-            The filler bases, empty if there is no filler.
-        """
-        if self.filler_length == 0:
-            return ""
-
-        previous_base: str = payload_sequence[-1] if payload_sequence else Huffman.START_BASE
-        # Not using specific indexer type, this works fine
-        filler_sequence: str = Goldman().trit_to_dna("0" * self.filler_length, previous_base)
-
-        return filler_sequence
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @staticmethod
@@ -202,6 +176,48 @@ class OligoFramer:
             index_width = required_index_width
 
         raise RuntimeError(f"Index width did not converge after {OligoFramer.MAX_ITERATIONS} iterations.")
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    def _set_payload_length(self) -> None:
+        """
+        Sets the payload length from the width left. The outer code may need a shorter payload (RSOuter needs full
+        six-base columns), so any bases it can't use become filler between the payload and checksum. This keeps the
+        oligo length the same as requested.
+        """
+        self.payload_length = self.width_left
+        if self.outer_correction:
+            self.payload_length = self.outer_correction.align_payload_length(self.width_left)
+
+        self.filler_length = self.width_left - self.payload_length
+
+
+    def _generate_filler(self, payload_sequence: str) -> str:
+        """
+        Generates the filler bases that go after the payload. The filler holds no data, it is a fixed run of Goldman
+        zero trits so it never repeats the previous base (keeps the homopolymer constraint) and can be regenerated
+        from the payload alone during decoding.
+
+        Args:
+            payload_sequence: The payload sequence the filler follows.
+
+        Returns:
+            The filler bases, empty if there is no filler.
+        """
+        if self.filler_length == 0:
+            return ""
+
+        previous_base: str = payload_sequence[-1] if payload_sequence else Huffman.START_BASE
+        # Not using specific indexer type, this works fine
+        filler_sequence: str = Goldman().trit_to_dna("0" * self.filler_length, previous_base)
+
+        return filler_sequence
 
 
     def _generate_indices(self) -> list[str]:
@@ -328,6 +344,121 @@ class OligoFramer:
             self._set_payload_length()
 
         return indices, huffman_codes, encoded_segments
+
+
+    def _checksum_is_valid(self, index_sequence: str, payload_sequence: str, checksum_sequence: str) -> bool:
+        """
+        Checks whether an oligo's checksum matches its index and payload.
+
+        Args:
+            index_sequence: The index sequence for the oligo.
+            payload_sequence: The payload sequence for the oligo.
+            checksum_sequence: The checksum sequence for the oligo.
+
+        Returns:
+            True if the checksum is valid, False otherwise.
+        """
+        try:
+            # Decode the checksum from the DNA sequence and verify it against the index and payload
+            checksum: int = self.checksum.decode_from_dna(
+                encoded_data=checksum_sequence,
+                before_sequence=payload_sequence + self._generate_filler(payload_sequence),
+                after_sequence=self.end_primer
+            )
+            return self.checksum.verify_checksum(
+                encoded_data=index_sequence + payload_sequence,
+                checksum=checksum
+            )
+        # Any custom error means we fail the checksum 
+        except Error:
+            return False
+
+
+    def _correct_oligo(self, 
+                       index_sequence: str,
+                       payload_sequence: str,
+                       checksum_sequence: str, 
+                       rs_sequence: str) -> tuple[str, str, str, str] | None:
+        """
+        Corrects an oligo with RS and returns its data plus corrected parity.
+        
+        Args:
+            index_sequence: The index sequence for the oligo.
+            payload_sequence: The payload sequence for the oligo.
+            checksum_sequence: The checksum sequence for the oligo.
+            rs_sequence: The RS parity sequence for the oligo.
+
+        Returns:
+            A tuple containing the corrected:
+                - index sequence
+                - payload sequence
+                - checksum sequence
+                - RS parity sequence
+            If correction was successful, or None if correction failed.
+
+        Raises:
+            RankError: If the index sequence is not in bounds of capacity.
+            ReedSolomonError: If the Reed-Solomon correction fails.
+            KeyError: If the indexer fails to unrank the corrected parity bytes back to DNA sequences.
+            ExpectedLengthError: If the length of the corrected oligo does not match the expected length.
+        """
+        if not self.inner_correction:
+            return None
+
+        # Correct the oligo using RS codes
+        encoded_data: str = index_sequence + payload_sequence + checksum_sequence
+        corrected_data: str
+        corrected_parity: str
+        corrected_data, corrected_parity = self.inner_correction.decode_from_dna(
+            encoded_data=encoded_data,
+            before_sequence=checksum_sequence,
+            after_sequence=self.end_primer,
+            parity_dna_sequence=rs_sequence,
+        )
+
+        # The inner RS does not cover the filler, so put it back after the payload before unframing
+        filler_start: int = self.indexer.width + self.payload_length
+        corrected_data = corrected_data[:filler_start] +\
+                         self._generate_filler(corrected_data[:filler_start]) +\
+                         corrected_data[filler_start:]
+
+        # Unframe the corrected oligo to get the corrected index, payload, and checksum sequences
+        corrected_index: str
+        corrected_payload: str
+        corrected_checksum: str
+        corrected_index, corrected_payload, corrected_checksum, corrected_parity = self.unframe_oligo(
+            framed_oligo=corrected_data + corrected_parity,
+            expected_length=self.oligo_length,
+            include_primers=False
+        )
+
+        # Verify the corrected checksum
+        if not self._checksum_is_valid(corrected_index, corrected_payload, corrected_checksum):
+            return None
+
+        # Return the corrected data plus the corrected parity
+        return corrected_index, corrected_payload, corrected_checksum, corrected_parity
+
+
+    def _add_primers(self, oligo: str) -> str:
+        """
+        Adds the configured primers to an oligo.
+
+        Args:
+            oligo: The oligo sequence to which primers should be added.
+
+        Returns:
+            The oligo sequence with primers added.
+        """
+
+        return self.start_primer + oligo + self.end_primer
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     def frame_oligo(self, index_sequence: str, payload_sequence: str, include_primers: bool = True) -> str:
@@ -529,114 +660,6 @@ class OligoFramer:
             # Yield empty strings for any oligo that does not match the expected length, as we can't unframe it
             except ExpectedLengthError as _:
                 yield ("", "", "", "")
-
-
-    def _checksum_is_valid(self, index_sequence: str, payload_sequence: str, checksum_sequence: str) -> bool:
-        """
-        Checks whether an oligo's checksum matches its index and payload.
-
-        Args:
-            index_sequence: The index sequence for the oligo.
-            payload_sequence: The payload sequence for the oligo.
-            checksum_sequence: The checksum sequence for the oligo.
-
-        Returns:
-            True if the checksum is valid, False otherwise.
-        """
-        try:
-            # Decode the checksum from the DNA sequence and verify it against the index and payload
-            checksum: int = self.checksum.decode_from_dna(
-                encoded_data=checksum_sequence,
-                before_sequence=payload_sequence + self._generate_filler(payload_sequence),
-                after_sequence=self.end_primer
-            )
-            return self.checksum.verify_checksum(
-                encoded_data=index_sequence + payload_sequence,
-                checksum=checksum
-            )
-        # Any custom error means we fail the checksum 
-        except Error:
-            return False
-
-
-    def _correct_oligo(self, 
-                       index_sequence: str,
-                       payload_sequence: str,
-                       checksum_sequence: str, 
-                       rs_sequence: str) -> tuple[str, str, str, str] | None:
-        """
-        Corrects an oligo with RS and returns its data plus corrected parity.
-        
-        Args:
-            index_sequence: The index sequence for the oligo.
-            payload_sequence: The payload sequence for the oligo.
-            checksum_sequence: The checksum sequence for the oligo.
-            rs_sequence: The RS parity sequence for the oligo.
-
-        Returns:
-            A tuple containing the corrected:
-                - index sequence
-                - payload sequence
-                - checksum sequence
-                - RS parity sequence
-            If correction was successful, or None if correction failed.
-
-        Raises:
-            RankError: If the index sequence is not in bounds of capacity.
-            ReedSolomonError: If the Reed-Solomon correction fails.
-            KeyError: If the indexer fails to unrank the corrected parity bytes back to DNA sequences.
-            ExpectedLengthError: If the length of the corrected oligo does not match the expected length.
-        """
-        if not self.inner_correction:
-            return None
-
-        # Correct the oligo using RS codes
-        encoded_data: str = index_sequence + payload_sequence + checksum_sequence
-        corrected_data: str
-        corrected_parity: str
-        corrected_data, corrected_parity = self.inner_correction.decode_from_dna(
-            encoded_data=encoded_data,
-            before_sequence=checksum_sequence,
-            after_sequence=self.end_primer,
-            parity_dna_sequence=rs_sequence,
-        )
-
-        # The inner RS does not cover the filler, so put it back after the payload before unframing
-        filler_start: int = self.indexer.width + self.payload_length
-        corrected_data = corrected_data[:filler_start] +\
-                         self._generate_filler(corrected_data[:filler_start]) +\
-                         corrected_data[filler_start:]
-
-        # Unframe the corrected oligo to get the corrected index, payload, and checksum sequences
-        corrected_index: str
-        corrected_payload: str
-        corrected_checksum: str
-        corrected_index, corrected_payload, corrected_checksum, corrected_parity = self.unframe_oligo(
-            framed_oligo=corrected_data + corrected_parity,
-            expected_length=self.oligo_length,
-            include_primers=False
-        )
-
-        # Verify the corrected checksum
-        if not self._checksum_is_valid(corrected_index, corrected_payload, corrected_checksum):
-            return None
-
-        # Return the corrected data plus the corrected parity
-        return corrected_index, corrected_payload, corrected_checksum, corrected_parity
-
-
-    def _add_primers(self, oligo: str) -> str:
-        """
-        Adds the configured primers to an oligo.
-
-        Args:
-            oligo: The oligo sequence to which primers should be added.
-
-        Returns:
-            The oligo sequence with primers added.
-        """
-
-        return self.start_primer + oligo + self.end_primer
 
 
     def correct_all_oligos(self, framed_oligos: list[str]) -> list[str | None]:

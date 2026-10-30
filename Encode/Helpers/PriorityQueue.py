@@ -1,6 +1,4 @@
 """
-PriorityQueue.py
-
 A priority queue implementation using a min-heap, used for building Huffman tree. Stores tuples of 
 (frequency, character) to facilitate the Huffman encoding process.
 """
@@ -10,6 +8,10 @@ from typing import Any
 
 
 class PriorityQueue:
+    """
+    A priority queue implementation using a min-heap.
+    """
+
     def __init__(self) -> None:
         """
         Initializes an empty priority queue.
@@ -23,6 +25,13 @@ class PriorityQueue:
 
         # Used to maintain insertion order for elements with same frequency
         self._order: int = 0
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     def build_queue(self, frequencies: dict[Any, int]) -> None:

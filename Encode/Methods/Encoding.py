@@ -15,6 +15,33 @@ from Encode.Helpers.Errors import JSONError
 
 
 class Encoding:
+    """
+    Base class for encoding methods. Provides common functionality for encoding and decoding DNA sequences, as well
+    as methods for calculating the size of the encoded data and counting runs of DNA bases. Subclasses should implement
+    specific encoding strategies by overriding the abstract methods defined in this class.
+    """
+
+    def __init__(self):
+        """
+        Initializes a new instance of the Encoding class. Sets up necessary constants for children classes.
+        """
+
+        # Huffman coding storage
+        # Each character is stored as 8 bits (1 byte)
+        self.KEY_MULTIPLIER: int = 8  
+        # Each bit in the code
+        self.VALUE_MULTIPLIER: int = 1  
+        # Each estimated base per byte 
+        self.ESTIMATED_BASES_PER_BYTE: float = 2.0
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
     # After encoding, use the binary string to map to DNA bases with its reverse
     DNA_BASES: Final[set[str]] = {'A', 'C', 'G', 'T'}
     DNA_MAP: Final[dict[str, str]] = {
@@ -34,18 +61,47 @@ class Encoding:
     ENCODED_TYPE: Final[str] = "encoded_type"
     INDEXER_TYPE: Final[str] = "indexer_type"
 
-    def __init__(self):
-        """
-        Initializes a new instance of the Encoding class. Sets up necessary constants for children classes.
-        """
 
-        # Huffman coding storage
-        # Each character is stored as 8 bits (1 byte)
-        self.KEY_MULTIPLIER: int = 8  
-        # Each bit in the code
-        self.VALUE_MULTIPLIER: int = 1  
-        # Each estimated base per byte 
-        self.ESTIMATED_BASES_PER_BYTE: float = 2.0
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @staticmethod
+    def binary_to_ascii(binary_string: str) -> str:
+        """
+        Converts a binary string to an ASCII string.
+
+        Args:
+            binary_string: The binary string to be converted.
+
+        Returns:
+            An ASCII string representation of the binary string.
+
+        Raises:
+            ValueError: If cannot convert a byte to an ASCII character.
+        """
+        ascii_string: str = ""
+        for index in range(0, len(binary_string), 8):
+            byte: str = binary_string[index:index+8]
+            ascii_string += chr(int(byte, 2))
+        return ascii_string
+
+
+    @staticmethod
+    def ascii_to_binary(ascii_string: str) -> str:
+        """
+        Converts an ASCII string to a binary string.
+
+        Args:
+            ascii_string: The ASCII string to be converted.
+
+        Returns:
+            A binary string representation of the ASCII string.
+        """
+        return "".join(format(ord(char), '08b') for char in ascii_string)
 
 
     @staticmethod
@@ -54,7 +110,7 @@ class Encoding:
         Reads the encoded data and padding information from a JSON file.
 
         Args:
-            json_path: The path to the input JSON file containing the encoded data and padding information.
+            json_inpath: The path to the input JSON file containing the encoded data and padding information.
 
         Returns:
             A dictionary containing the encoded data, padding information, and Huffman codes (if applicable).
@@ -75,7 +131,66 @@ class Encoding:
                 )
             return json_data
 
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @abstractmethod
+    def _add_padding(self, data: str, payload_length: int) -> str:
+        raise NotImplementedError()
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
     
+
+    @abstractmethod
+    def encode_segments(self, data: str, payload_length: int, *args, **kwargs) -> tuple[dict[str, str], list[str], Any]:
+        raise NotImplementedError()
+    
+
+    @abstractmethod
+    def encode(self, data: str) -> tuple[dict[str, str], str]:
+        raise NotImplementedError()
+
+
+    @abstractmethod
+    def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
+        raise NotImplementedError()
+
+
+    @abstractmethod
+    def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
+        raise NotImplementedError()
+
+
+    @abstractmethod
+    def decode(self, data: str, *args, **kwargs) -> str:
+        raise NotImplementedError()
+
+
+    @abstractmethod
+    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
+        raise NotImplementedError()
+
+
+    @abstractmethod
+    def estimate_bases_per_byte(self) -> float:
+        raise NotImplementedError()
+
+
+    @abstractmethod
+    def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
+        raise NotImplementedError()
+
+        
     def save_json_table(self, 
                         json_path: str, 
                         encoded_data: str | list[str], 
@@ -119,87 +234,6 @@ class Encoding:
                 Encoding.ENCODED_TYPE: class_name
             }
             json.dump(save, encoded_file, indent=4)
-
-
-    @abstractmethod
-    def _add_padding(self, data: str, payload_length: int) -> str:
-        raise NotImplementedError()
-    
-
-    @abstractmethod
-    def encode_segments(self, data: str, payload_length: int, *args, **kwargs) -> tuple[dict[str, str], list[str], Any]:
-        raise NotImplementedError()
-    
-
-    @abstractmethod
-    def encode(self, data: str) -> tuple[dict[str, str], str]:
-        raise NotImplementedError()
-
-
-    @abstractmethod
-    def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
-        raise NotImplementedError()
-
-
-    @abstractmethod
-    def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
-        raise NotImplementedError()
-
-
-    @abstractmethod
-    def decode(self, data: str, *args, **kwargs) -> str:
-        raise NotImplementedError()
-
-
-    @abstractmethod
-    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
-        raise NotImplementedError()
-
-
-    @abstractmethod
-    def estimate_bases_per_byte(self) -> float:
-        raise NotImplementedError()
-
-
-    @abstractmethod
-    def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
-        raise NotImplementedError()
-
-
-    @staticmethod
-    def binary_to_ascii(binary_string: str) -> str:
-        """
-        Converts a binary string to an ASCII string.
-
-        Args:
-            binary_string: The binary string to be converted.
-
-        Returns:
-            An ASCII string representation of the binary string.
-
-        Raises:
-            ValueError: If cannot convert a byte to an ASCII character.
-        """
-        ascii_string: str = ""
-        for index in range(0, len(binary_string), 8):
-            byte: str = binary_string[index:index+8]
-            ascii_string += chr(int(byte, 2))
-        return ascii_string
-
-
-    @staticmethod
-    def ascii_to_binary(ascii_string: str) -> str:
-        """
-        Converts an ASCII string to a binary string.
-
-        Args:
-            ascii_string: The ASCII string to be converted.
-
-        Returns:
-            A binary string representation of the ASCII string.
-        """
-        return "".join(format(ord(char), '08b') for char in ascii_string)
-
 
 
     def count_runs(self, data: str, k: int = 4) -> tuple[int, list[tuple[int, int]]]:

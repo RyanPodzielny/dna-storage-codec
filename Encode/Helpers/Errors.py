@@ -1,9 +1,19 @@
+"""
+This module contains custom error classes for the Encode package. These errors are used to handle various exceptions
+that may occur during the encoding and decoding processes, including JSON errors, encoding errors, indexing errors,
+payload length errors, and error correction failures. Each error class provides a specific message to help identify
+the nature of the error and facilitate debugging
+"""
+
+
+
 class Error(Exception):
     """
-    Base class to encompass all of custom errors"
+    Base class to encompass all of custom errors
     """
     def __init__(self, message: str = "Encoding error occurred"):
         super().__init__(message)
+
 
 
 class JSONError(Error):
@@ -18,6 +28,7 @@ class JSONError(Error):
         super().__init__(f"{message}: {json_path}")
 
 
+
 class EncodingError(Error):
     """
     Error raised when an encoding or decoding error occurs.
@@ -28,6 +39,7 @@ class EncodingError(Error):
                  encoding_method: str):
         self.encoding_method: str = encoding_method
         super().__init__(message)
+
 
 
 class IndexingError(Error):
@@ -43,6 +55,7 @@ class IndexingError(Error):
         super().__init__(f"{message}: Index {index} is not in bounds of what is needed.")
 
 
+
 class PayloadLengthError(Error):
     """
     Error raised when the payload length is not valid (e.g., less than or equal to 0).
@@ -53,6 +66,7 @@ class PayloadLengthError(Error):
                  payload_length: int):
         self.payload_length: int = payload_length
         super().__init__(f"{message}: Payload length {payload_length} is not valid.")
+
 
 
 class UnrankError(Error):
@@ -67,6 +81,7 @@ class UnrankError(Error):
         self.index: int = index
         self.capacity: int = capacity
         super().__init__(f"{message}: Index {index} is not in bounds of capacity {capacity}.")
+
 
 
 class RankError(Error):
@@ -84,6 +99,7 @@ class RankError(Error):
                          f" does not match expected width {width}.")
 
 
+
 class MaxRunLengthError(Error):
     """
     Error raised when a sequence exceeds the maximum run length.
@@ -96,6 +112,7 @@ class MaxRunLengthError(Error):
         self.sequence: str = sequence
         self.max_run_length: int = max_run_length
         super().__init__(f"{message}: {sequence} exceeds maximum run length of {max_run_length}.")
+
 
 
 class ExpectedLengthError(Error):
@@ -113,6 +130,7 @@ class ExpectedLengthError(Error):
                          f" does not match expected length {expected_length}.")
 
 
+
 class InnerCodeError(Error):
     """
     Error raised when inner error correction fails to correct a sequence.
@@ -125,6 +143,7 @@ class InnerCodeError(Error):
         super().__init__(f"{message}: {sequence} could not be corrected by inner error correction.")
 
 
+
 class OuterCodeError(Error):
     """
     Error raised when outer error correction fails to correct a sequence.
@@ -135,6 +154,7 @@ class OuterCodeError(Error):
         super().__init__(f"{message}: Could not perform outer error correction on the provided sequences.")
 
 
+
 class MismatchSegments(Error):
     """
     Error raised when both previous and payload segments are None for the same index.
@@ -143,6 +163,7 @@ class MismatchSegments(Error):
                  *,
                  message: str = "Segments mismatching at critical indicies"):
         super().__init__(message=f"{message}: Cannot perform error correction due to segment mismatches.")
+
 
 
 class NotEnoughPreviousSegments(Error):

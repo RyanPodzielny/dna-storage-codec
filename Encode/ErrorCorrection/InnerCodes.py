@@ -1,22 +1,42 @@
-# Not using galois here as it is much slower - we are using standard GF(256) for inners
+"""
+Module provides inner error correction codes for DNA encoding. Inner codes are applied to the data before it is 
+converted to DNA sequences. They are used to correct errors that occur during the synthesis and sequencing of the
+DNA. The inner codes are designed to work with the indexing and encoding methods provided in the Encode package, and can
+be used in conjunction with outer error correction codes for additional error correction
+capabilities. The inner codes are implemented using the reedsolo library for Reed-Solomon error
+"""
+
+
+from abc import abstractmethod
+
 import reedsolo 
 from fastcrc import crc16, crc32
-from typing import Callable
+from typing import Callable, Final
 from Encode.Indexer import Indexer
 from Encode.Methods.Encoding import Encoding
 from Encode.Helpers.Errors import InnerCodeError, RankError
 
 
 class InnerCodes():
+    """
+    Abstract base class for inner error correction codes. This class defines the interface for encoding and decoding
+    data to and from DNA sequences. Subclasses must implement the encode_to_dna and decode_from_dna methods to provide 
+    specific error correction functionality.
+    """
     def __init__(self, indexer: type[Indexer], *args, **kwargs):
         self.indexer = indexer
 
-        
+
+    @abstractmethod
     def encode_to_dna(self, before_sequence: str, after_sequence: str, *args, **kwargs) -> tuple[str, str]:
         raise NotImplementedError()
 
 
-    def decode_from_dna(self, encoded_data: str, before_sequence: str, after_sequence: str, *args, **kwargs) -> tuple[str, str]:
+    @abstractmethod
+    def decode_from_dna(self, 
+                        encoded_data: str, 
+                        before_sequence: str, after_sequence: str,
+                        *args, **kwargs) -> tuple[str, str]:
         raise NotImplementedError()
 
 
@@ -55,6 +75,13 @@ class CheckSum(InnerCodes):
         )
 
 
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC METHODS                                                         #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
     def get_dna_bases(self) -> int:
         """
         Gets the length of bits used for the checksum based on the configuration,
@@ -75,7 +102,6 @@ class CheckSum(InnerCodes):
         """
 
         return self.width
-
 
 
     def calculate_checksum(self, encoded_data: str) -> int:
@@ -216,12 +242,14 @@ class CheckSum(InnerCodes):
         return checksum
 
 
+
 class RSInner(InnerCodes):
     """
-    Reed-Solomon error correction for DNA strands.
+    Class to implement Reed-Solomon error correction for inner codes. This class provides methods to encode and decode 
+    data into dna sequences with Reed-Solomon error correction/parity. Uses the `reedsolo` library for encoding and 
+    decoding as its lightweight and fast. Only corrects substitution errors, not insertions or deletions.
     """
-    # Padding base for Reed-Solomon encoding
-    RS_PADDING: str = 'A' 
+
 
     def __init__(self, indexer: type[Indexer], *, parity_bytes: int, max_run_length: int | None = None):
         """
@@ -249,6 +277,24 @@ class RSInner(InnerCodes):
             width=indexer.determine_optimal_width(1 << 8),
             max_run_length=max_run_length
         )
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC CONSTANTS                                                       #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    # Padding base for Reed-Solomon encoding
+    RS_PADDING: Final[str] = 'A' 
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPERS METHODS                                                #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     def _to_bytes(self, encoded_data: str) -> bytearray:
@@ -312,38 +358,6 @@ class RSInner(InnerCodes):
         return list(self.RS.encode(byte_stream)[-self.parity_bytes:])
 
 
-    def encode_to_dna(self, before_sequence: str, after_sequence: str, *, encoded_data: str,) -> str:
-        """
-        Converts the Reed-Solomon parity bytes integer to a DNA sequence.
-
-        Args:
-            before_sequence: The sequence before the parity bytes in the oligo.
-            after_sequence: The sequence after the parity bytes in the oligo.
-            encoded_data: The data to be encoded with parity. We assume its the [index | payload | checksum] sequence.
-    
-        Returns:
-            The corresponding DNA sequence to the Reed-Solomon parity bytes.
-        
-        Raises:
-            UnrankError: If unable to unrank the Reed-Solomon parity bytes integer to a DNA sequence.
-        """
-        parity_bytes: list[int] = self._encode(encoded_data)
-        dna_sequence: str = ""
-
-        # Unrank each parity byte individually to a DNA sequence using the indexer
-        for byte in parity_bytes:
-            dna_sequence += self.indexer.unrank(
-                index=byte, 
-                before_sequence=before_sequence,
-                after_sequence=after_sequence
-            )
-
-            # Update the before_sequence for the next parity byte to be encoded
-            before_sequence = dna_sequence 
-
-        return dna_sequence
-
-
     def _decode(self, 
                 encoded_data: str, 
                 parity_bytes: bytearray, 
@@ -388,6 +402,45 @@ class RSInner(InnerCodes):
     
         # Return only the original sequence length, discard any padding and parity bytes corrected
         return decoded_sequence[:sequence_length], corrected_parity
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC METHODS                                                         #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    def encode_to_dna(self, before_sequence: str, after_sequence: str, *, encoded_data: str,) -> str:
+        """
+        Converts the Reed-Solomon parity bytes integer to a DNA sequence.
+
+        Args:
+            before_sequence: The sequence before the parity bytes in the oligo.
+            after_sequence: The sequence after the parity bytes in the oligo.
+            encoded_data: The data to be encoded with parity. We assume its the [index | payload | checksum] sequence.
+    
+        Returns:
+            The corresponding DNA sequence to the Reed-Solomon parity bytes.
+        
+        Raises:
+            UnrankError: If unable to unrank the Reed-Solomon parity bytes integer to a DNA sequence.
+        """
+        parity_bytes: list[int] = self._encode(encoded_data)
+        dna_sequence: str = ""
+
+        # Unrank each parity byte individually to a DNA sequence using the indexer
+        for byte in parity_bytes:
+            dna_sequence += self.indexer.unrank(
+                index=byte, 
+                before_sequence=before_sequence,
+                after_sequence=after_sequence
+            )
+
+            # Update the before_sequence for the next parity byte to be encoded
+            before_sequence = dna_sequence 
+
+        return dna_sequence
 
 
     def decode_from_dna(self, 

@@ -1,6 +1,11 @@
+"""
+Module provides outer error correction codes for DNA encoding. Outer codes are applied to the payload segments after
+inner error correction codes have been applied. They are used to correct errors that occur during the synthesis
+and sequencing of the DNA.
+"""
+
+
 from abc import abstractmethod
-from functools import lru_cache
-import math
 from typing import Any, ClassVar, Final, List, override
 from numpy.typing import NDArray
 
@@ -9,6 +14,7 @@ from numpy.typing import NDArray
 #   and use Goldman's rotation scheme to avoid homopolymers. It is much slower than reedsolo, but it the best option.
 import galois
 import numpy as np
+import math
 
 from Encode.Helpers.Errors import MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, PayloadLengthError
 from Encode.Indexer import GoldmanIndexer
@@ -16,6 +22,9 @@ from Encode.Methods.HuffmanCoding import Goldman
 
 
 class OuterCodes():
+    """
+    Serves as a base class for outer error correction codes. 
+    """
     def __init__(self):
         self.payload_per_block: int = 0
         self.parity_per_block: int = 0
@@ -46,6 +55,7 @@ class OuterCodes():
         raise NotImplementedError()
 
 
+
 class GoldmanRedundancy(OuterCodes):
     """
     Creates four quarter-shifted copies of a payload stream.
@@ -55,6 +65,7 @@ class GoldmanRedundancy(OuterCodes):
 
     def add_redundancy(self, segments: List[str], payload_length: int) -> None:
         pass
+
 
     
 class XOR(OuterCodes):
@@ -89,14 +100,6 @@ class RSOuter(OuterCodes):
     previous base, so each six-base column is represented by six trits.
     """
 
-    COLUMN_LENGTH: Final[int] = 6
-
-    GF_ORDER: int = 3**6
-    GF: type[galois.FieldArray] = galois.GF(GF_ORDER)
-    MAX_BLOCK_STRANDS: int = GF_ORDER - 1
-
-    # Cache for RS codes when we have the same parity_strands value. Takes a while to initialize.
-    _RS_CACHE: ClassVar[dict[tuple[int, int], galois.ReedSolomon]] = {}
 
     def __init__(self, redundancy_percentage: float = 0.1):
         """
@@ -120,6 +123,31 @@ class RSOuter(OuterCodes):
         self.rs: galois.ReedSolomon = self._get_rs(self.payload_per_block, self.parity_per_block)
 
         self.num_blocks: int = 0
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    # How many bases we define to be a column
+    COLUMN_LENGTH: Final[int] = 6
+
+    GF_ORDER: int = 3**6
+    GF: type[galois.FieldArray] = galois.GF(GF_ORDER)
+    MAX_BLOCK_STRANDS: int = GF_ORDER - 1
+
+    # Cache for RS codes when we have the same parity_strands value. Takes a while to initialize.
+    _RS_CACHE: ClassVar[dict[tuple[int, int], galois.ReedSolomon]] = {}
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @staticmethod
@@ -150,6 +178,13 @@ class RSOuter(OuterCodes):
         """
 
         return int("".join(str(trit) for trit in trits), 3)
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
     
 
     def _get_rs(self, payload_count: int, parity_count: int) -> galois.ReedSolomon:
@@ -313,8 +348,7 @@ class RSOuter(OuterCodes):
         return self.trits_to_field_symbol(trits)
 
 
-    @staticmethod
-    def _field_symbol_to_dna(symbol: int, previous_base: str) -> str:
+    def _field_symbol_to_dna(self, symbol: int, previous_base: str) -> str:
         """
         Converts one GF(3^6) parity symbol back into Goldman-encoded DNA.
 
@@ -437,6 +471,99 @@ class RSOuter(OuterCodes):
         return columns
 
 
+    def _get_erasure_mask(self, payload_block: List[str | None], ) -> List[bool]:
+        """
+        Creates an erasure mask for the given sequences. True indicates an erasure (None), and False indicates a valid 
+        sequence.
+
+        Args:
+            payload_block: The list of payload segments.
+
+        Returns:
+            A list of booleans representing the erasure mask.
+        """
+        # Get the erasure mask - everywhere they are are 
+        erasure_mask: List[bool] = []
+        for sequence in payload_block:
+            if sequence is None:
+                erasure_mask.append(True)
+                continue
+
+            erasure_mask.append(False)
+
+        return erasure_mask
+
+
+    def _fill_erasures(self,
+                       rs: galois.ReedSolomon,
+                       codewords: galois.FieldArray,
+                       erasure_mask: List[bool]) -> galois.FieldArray | None:
+        """
+        Fills in the erased symbols of every column in a block at once. Galois' decoder is very very slow whenever
+        there is an erasure that is not known (all are known to us), but when we only have erasures (the other strands 
+        passed the checksum) we can solve for the missing symbols directly.
+
+        Args:
+            rs: The Reed-Solomon code for the block.
+            codewords: The (columns, block_strands) symbols of the block, erased symbols can be anything.
+            erasure_mask: True for each strand that is erased.
+
+        Returns:
+            The codewords with the erased symbols filled in, or None if there are more erasures than parity strands.
+        """
+        # Positions (strands) of the erased and known symbols - needs to be numpy arrays for indexing
+        erased: NDArray[np.int_] = np.flatnonzero(erasure_mask)
+        known: NDArray[np.int_] = np.flatnonzero(np.logical_not(erasure_mask))
+
+        # Nothing to fill
+        if erased.size == 0:
+            return codewords
+
+        # Each parity strand gives one equation, so we can't solve for more erasures than we have parity
+        if erased.size > rs.n - rs.k:
+            return None
+
+        # Galois computes H (the parity-check matrix) once per RS code. A shortened (last) block drops its leading 
+        #   message positions, so it uses the last block_strands columns of H. Keeping one row/equation per erasure
+        block_strands: int = codewords.shape[1]
+        parity_check: galois.FieldArray = self.GF(rs.H[:erased.size, -block_strands:])
+
+        # Each row of H is one check (equation) that a valid codeword passes: multiply every strand's symbol by that
+        #   row's number for the strand, add them all up, and the total is always 0. For example, with 4 strands where
+        #   strand 2 is erased (x) and one check row [h0, h1, h2, h3]:
+        #       h0*s0 + h1*s1 + h2*x + h3*s3 = 0
+        #   We know s0, s1 and s3, so we can add up their part now and move it to the other side:
+        #       h2*x = -(h0*s0 + h1*s1 + h3*s3)
+        #   This line computes that righ hand side, the "-(h0*s0 + h1*s1 + h3*s3)", for every check row and every
+        #   column at once. matmul does the multiply and add for us (in GF(3^6) math, not normal integer math). The
+        #   codewords are transposed (.T) because matmul pairs each row of the first matrix with each column of the
+        #   second, so the strands of each codeword need to run down a column to line up with the strands in H's rows.
+        #   The result is a (erasures, columns) table: one total per check, per codeword column.
+        right_side: galois.FieldArray = -np.matmul(parity_check[:, known], codewords[:, known].T)
+
+        # Now we have one equation per check with only the erased symbols unknown, e.g. with 2 erasures (x, y):
+        #       a*x + b*y = r0
+        #       c*x + d*y = r1
+        #   where a, b, c, d are H's numbers for the erased strands and r0, r1 come from right_side. Same number of
+        #   equations as unknowns, so like solving a system of equations in algebra, there is exactly one answer, and
+        #   that answer is the missing symbols. solve does this for every column at once, giving a (erasures, columns)
+        #   table of the erased symbols. Wrapped in self.GF to make sure the result stays a field array.
+        erased_symbols: galois.FieldArray = self.GF(np.linalg.solve(parity_check[:, erased], right_side))
+
+        # Put the found symbols back into the erased positions (transposed back to one row per codeword column)
+        filled: galois.FieldArray = codewords.copy()
+        filled[:, erased] = erased_symbols.T
+
+        return filled
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC METHODS                                                         #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
     def add_redundancy(self, previous_sequences: List[str], payload_sequences: List[str]) -> List[str]:
         """
         Adds Reed-Solomon parity strands into each block. Basically we take the payload strands and add parity strands 
@@ -514,93 +641,6 @@ class RSOuter(OuterCodes):
             parity_strands.extend(parity_block)
 
         return parity_strands
-
-
-    def _get_erasure_mask(self, payload_block: List[str | None], ) -> List[bool]:
-        """
-        Creates an erasure mask for the given sequences. True indicates an erasure (None), and False indicates a valid 
-        sequence.
-
-        Args:
-            payload_block: The list of payload segments.
-
-        Returns:
-            A list of booleans representing the erasure mask.
-        """
-        # Get the erasure mask - everywhere they are are 
-        erasure_mask: List[bool] = []
-        for sequence in payload_block:
-            if sequence is None:
-                erasure_mask.append(True)
-                continue
-
-            erasure_mask.append(False)
-
-        return erasure_mask
-
-
-    def _fill_erasures(self,
-                       rs: galois.ReedSolomon,
-                       codewords: galois.FieldArray,
-                       erasure_mask: List[bool]) -> galois.FieldArray | None:
-        """
-        Fills in the erased symbols of every column in a block at once. Galois' decoder is very very slow whenever
-        there is an erasure, but when we only have erasures (the other strands passed the checksum) we can solve for the
-        missing symbols directly. Basically, every column has its erasures at the same strands, so all columns are 
-        solved in one call.
-
-        Args:
-            rs: The Reed-Solomon code for the block.
-            codewords: The (columns, block_strands) symbols of the block, erased symbols can be anything.
-            erasure_mask: True for each strand that is erased.
-
-        Returns:
-            The codewords with the erased symbols filled in, or None if there are more erasures than parity strands.
-        """
-        # Positions (strands) of the erased and known symbols - needs to be numpy arrays for indexing
-        erased: NDArray[np.int_] = np.flatnonzero(erasure_mask)
-        known: NDArray[np.int_] = np.flatnonzero(np.logical_not(erasure_mask))
-
-        # Nothing to fill
-        if erased.size == 0:
-            return codewords
-
-        # Each parity strand gives one equation, so we can't solve for more erasures than we have parity
-        if erased.size > rs.n - rs.k:
-            return None
-
-        # Galois computes H (the parity-check matrix) once per RS code. A shortened (last) block drops its leading 
-        #   message positions, so it uses the last block_strands columns of H. Keeping one row/equation per erasure
-        block_strands: int = codewords.shape[1]
-        parity_check: galois.FieldArray = self.GF(rs.H[:erased.size, -block_strands:])
-
-        # Each row of H is one check (equation) that a valid codeword passes: multiply every strand's symbol by that
-        #   row's number for the strand, add them all up, and the total is always 0. For example, with 4 strands where
-        #   strand 2 is erased (x) and one check row [h0, h1, h2, h3]:
-        #       h0*s0 + h1*s1 + h2*x + h3*s3 = 0
-        #   We know s0, s1 and s3, so we can add up their part now and move it to the other side:
-        #       h2*x = -(h0*s0 + h1*s1 + h3*s3)
-        #   This line computes that righ hand side, the "-(h0*s0 + h1*s1 + h3*s3)", for every check row and every
-        #   column at once. matmul does the multiply and add for us (in GF(3^6) math, not normal integer math). The
-        #   codewords are transposed (.T) because matmul pairs each row of the first matrix with each column of the
-        #   second, so the strands of each codeword need to run down a column to line up with the strands in H's rows.
-        #   The result is a (erasures, columns) table: one total per check, per codeword column.
-        right_side: galois.FieldArray = -np.matmul(parity_check[:, known], codewords[:, known].T)
-
-        # Now we have one equation per check with only the erased symbols unknown, e.g. with 2 erasures (x, y):
-        #       a*x + b*y = r0
-        #       c*x + d*y = r1
-        #   where a, b, c, d are H's numbers for the erased strands and r0, r1 come from right_side. Same number of
-        #   equations as unknowns, so like solving a system of equations in algebra, there is exactly one answer, and
-        #   that answer is the missing symbols. solve does this for every column at once, giving a (erasures, columns)
-        #   table of the erased symbols. Wrapped in self.GF to make sure the result stays a field array.
-        erased_symbols: galois.FieldArray = self.GF(np.linalg.solve(parity_check[:, erased], right_side))
-
-        # Put the found symbols back into the erased positions (transposed back to one row per codeword column)
-        filled: galois.FieldArray = codewords.copy()
-        filled[:, erased] = erased_symbols.T
-
-        return filled
 
 
     def perform_correction(self,
@@ -788,6 +828,26 @@ class DirectDNARSOuter(RSOuter):
     them with six nt's (too keep consitient with the RSOuter class) into a GF(4^6) symbol.
     """
 
+
+    def __init__(self, redundancy_percentage: float = 0.1):
+        """
+        Initializes the DirectDNARSOuter with a specified redundancy percentage.
+
+        Args:
+            redundancy_percentage: The percentage of redundancy to be used in the outer code.
+        """
+        super().__init__(redundancy_percentage=redundancy_percentage)
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    # Columns stays the same
+
     GF_ORDER: int = 4**6
     GF: type[galois.FieldArray] = galois.GF(GF_ORDER)
 
@@ -802,14 +862,12 @@ class DirectDNARSOuter(RSOuter):
     }
     DIGIT_TO_DNA: Final[dict[int, str]] = {v: k for k, v in DNA_TO_DIGIT.items()}
 
-    def __init__(self, redundancy_percentage: float = 0.1):
-        """
-        Initializes the DirectDNARSOuter with a specified redundancy percentage.
 
-        Args:
-            redundancy_percentage: The percentage of redundancy to be used in the outer code.
-        """
-        super().__init__(redundancy_percentage=redundancy_percentage)
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @override
