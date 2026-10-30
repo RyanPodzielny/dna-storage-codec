@@ -143,3 +143,13 @@ class MismatchSegments(OuterCodeError):
                  *,
                  message: str = "Segments mismatching at critical indicies"):
         super().__init__(message=f"{message}: Cannot perform error correction due to segment mismatches.")
+
+
+class NotEnoughPreviousSegments(OuterCodeError):
+    """
+    Error raised when there are not enough segments to perform error correction.
+    """
+    def __init__(self, 
+                 *,
+                 message: str = "Not enough segments for error correction"):
+        super().__init__(message=f"{message}: Cannot perform error correction due to insufficient segments.")
