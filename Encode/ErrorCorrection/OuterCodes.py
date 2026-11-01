@@ -6,7 +6,7 @@ and sequencing of the DNA.
 
 
 from abc import abstractmethod
-from typing import Any, ClassVar, Final, List, override
+from typing import ClassVar, Final, List, override
 from numpy.typing import NDArray
 
 # Can't use reedsolo because it doesn't support GF(3^6) and has a max of 255 symbols. We need to encode each column of
@@ -16,9 +16,11 @@ import galois
 import numpy as np
 import math
 
-from Encode.Helpers.Errors import MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, PayloadLengthError
+from Encode.Helpers.Errors import EncodingError, MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, \
+    PayloadLengthError
 from Encode.Indexer import GoldmanIndexer
-from Encode.Methods.HuffmanCoding import Goldman
+from Encode.Methods.Encoding import Encoding
+from Encode.Methods.HuffmanCoding import Goldman, Huffman
 
 
 class OuterCodes():
@@ -28,7 +30,127 @@ class OuterCodes():
     def __init__(self):
         self.payload_per_block: int = 0
         self.parity_per_block: int = 0
-        pass
+        # Full block length (payload + parity) - each strand in the block gets its own index
+        self.block_strands: int = 0
+        self.num_blocks: int = 0
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    DNA_TO_DIGIT: Final[dict[str, int]] = {
+        "A": 0,
+        "C": 1,
+        "G": 2,
+        "T": 3,
+    }
+    DIGIT_TO_DNA: Final[dict[int, str]] = {v: k for k, v in DNA_TO_DIGIT.items()}
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    def _validate_segments(self,
+                           previous_segments: list[str] | list[str | None], 
+                           payload_segments: list[str] | list[str | None]) -> None:
+        """
+        Validates the previous and payload segments for Reed-Solomon error correction.
+
+        Args:
+            previous_segments: The previous bases to be used for the columns.
+            payload_segments: The payload segments to be put RS parity on.
+
+        Raises:
+            ValueError: If previous_segments or payload_segments is empty/None.
+            MismatchSegments: If there are not enough previous sequences for the payload and parity strands.
+        """
+        if not previous_segments:
+            raise ValueError("Previous segments cannot be empty.")
+        if not payload_segments:
+            raise ValueError("Payload segments cannot be empty.")
+        if len(previous_segments) < len(payload_segments):
+            raise MismatchSegments(
+                message="There must be at least one previous sequence for each payload sequence"
+            )
+
+
+    def _segment_to_blocks(self,
+                           previous_segments: list[str],
+                           payload_segments: list[str]) -> tuple[list[list[str]], list[list[str]]]:
+        """
+        Segments are split into blocks of strands - basically each segment into its own block.
+
+        Args:
+            previous_segments: The previous bases to be used for the columns.
+            payload_segments: The payload segments to be put parity on.
+
+        Returns:
+            A tuple containing the previous blocks and the payload blocks.
+
+        Raises:
+            ValueError: If previous_segments or payload_segments is empty/None.
+        """
+        self._validate_segments(previous_segments, payload_segments)
+
+        # Our previous blocks (likely our indices) need to be the entire block length as each strand will need its own
+        #   index. The payload blocks will be the block strand length as we will add parity_strands to each block.
+        previous_blocks: list[list[str]] = []
+        for index in range(0, len(previous_segments), self.block_strands):
+            previous_blocks.append(previous_segments[index:index + self.block_strands])
+
+        # Payload blocks are up to the payload_per_block length
+        payload_blocks: list[list[str]] = []
+        for index in range(0, len(payload_segments), self.payload_per_block):
+            payload_blocks.append(payload_segments[index:index + self.payload_per_block])
+
+        return previous_blocks, payload_blocks
+
+
+    def _retrieve_payload_length(self, payload_segments: list[str] | list[str | None]) -> int:
+        """
+        Retrieves the length of the payload segments.
+
+        Args:
+            payload_segments: The payload segments to be put RS parity on.
+
+        Returns:
+            The length of the payload segments.
+
+        Raises:
+            ValueError: If payload_segments is empty/None.
+            PayloadLengthError: If the payload length is 0.
+        """
+        if not payload_segments:
+            raise ValueError("Payload segments cannot be empty.")
+
+        # Get the next payload sequence that isn't none, if we don't find one, then the payload length is 0 and we 
+        #   should raise an error, regardless if we allowing None's or not - we need them to have a length
+        payload_length: int = next(
+            (len(segment) for segment in payload_segments if segment is not None), 
+            0
+        )
+        if payload_length == 0:
+            raise PayloadLengthError(
+                message="Payload segments must have a positive length",
+                payload_length=payload_length
+            )
+
+        return payload_length
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
     @staticmethod
@@ -37,23 +159,50 @@ class OuterCodes():
 
 
     @abstractmethod
+    def add_redundancy(self, previous_sequences: list[str], payload_sequences: list[str]) -> list[str]:
+        raise NotImplementedError()
+
+
+    @abstractmethod
+    def perform_correction(self, previous_sequences: list[str], encoded_sequences: list[str | None]) -> list[str | None]:
+        raise NotImplementedError()
+
+
+    @abstractmethod
     def calculate_total_strands(self, payload_strands: int) -> int:
         raise NotImplementedError()
 
 
-    @abstractmethod
-    def select_payload_indices(self, indices: List[str]) -> List[str]:
-        raise NotImplementedError()
+    def select_payload_indices(self, indices: list[str]) -> list[str]:
+        """
+        Remove parity indices from each block before payload encoding.
 
+        The returned indices retain their original block order, so each payload segment is encoded with the same
+        predecessor it will have in the final framed data.
 
-    @abstractmethod
-    def add_redundancy(self, previous_sequences: List[str], payload_sequences: List[str]) -> List[str]:
-        raise NotImplementedError()
+        Args:
+            indices: The complete list of indices, including both payload and parity indices.
 
-    @abstractmethod
-    def perform_correction(self, previous_sequences: List[str], encoded_sequences: List[str | None]) -> List[str | None]:
-        raise NotImplementedError()
+        Returns:
+            A list of indices that are used for payload encoding, with parity indices removed. The last block is usually
+            shorter than a full block, so the list may end with indices past the payload count - these are ignored as
+            they sit where the next payload strand would go in a full block.
 
+        Raises:
+            ValueError: If indices is empty or None.
+        """
+        if not indices:
+            raise ValueError("Indices cannot be empty.")
+
+        payload_indices: list[str] = []
+        for block_start in range(0, len(indices), self.block_strands):
+            block: list[str] = indices[block_start:block_start + self.block_strands]
+
+            # Add the first payload_per_block indices from the block to the payload_indices list
+            payload_indices += block[:self.payload_per_block]
+        
+        return payload_indices
+    
 
 
 class GoldmanRedundancy(OuterCodes):
@@ -62,34 +211,456 @@ class GoldmanRedundancy(OuterCodes):
     """
 
     LAYERS: int = 4
+    def __init__(self):
+        super().__init__()
+        self.payload_per_block: int = 1
+        self.parity_per_block: int = 3
+        self.block_strands: int = self.payload_per_block + self.parity_per_block
 
-    def add_redundancy(self, segments: List[str], payload_length: int) -> None:
+
+    def add_redundancy(self, segments: list[str], payload_length: int) -> None:
         pass
 
 
     
 class XOR(OuterCodes):
+    """
+    Implements a simple XOR-based error correction scheme on the DNA itself. Requires the strands to be homopolymer-free
+    so we can use Goldman's rotation scheme to encode the strands. Each parity strand is the XOR of two payload 
+    strands (mod 3). If one of the payload strands is missing, we can recover it using the parity strand and the other
+    payload strand. Will fail if more than one payload strand is missing in a block, since we only have one parity 
+    strand per block.
+    """
 
+    def __init__(self):
+        super().__init__()
+        self.payload_per_block: int = 2
+        self.parity_per_block: int = 1
+        self.block_strands: int = self.payload_per_block + self.parity_per_block
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    @staticmethod
+    def align_payload_length(payload_length: int) -> int:
+        """
+        Aligns the payload to what is is. No aligment needed for XOR, just need the strands to same length.
+
+        Args:
+            payload_length: The number of bases available for the payload.
+
+        Returns:
+            The payload length.
+
+        Raises:
+            PayloadLengthError: If the payload length is 0.
+        """
+        if payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0",
+                payload_length=payload_length
+            )
+
+        return payload_length
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    def _XOR_mod(self, dit_strand_1: str, dit_strand_2: str, mod: int = 3) -> str:
+        """
+        Performs XOR on two dit strings. The XOR is performed mod 3, so the result is a trit string of the same length.
+        The sum is negated so that strand 1 + strand 2 + parity = 0 (mod 3), the same as A ^ B ^ P = 0 in binary XOR.
+        This way any missing strand is recovered the same way: -(sum of the other two) mod 3.
+
+        Args:
+            dit_strand_1: The first dit string.
+            dit_strand_2: The second dit string.
+            mod: The modulus to use for the XOR operation. Default is 3 for trits.
+
+        Returns:
+            The result of the XOR operation as a dit (unit of measure, either trit or quat) string.
+
+        Raises:
+            ValueError: If the dit strings are not of the same length or contain invalid dit values.
+        """
+        # Check that the trit strings are of the same length
+        if len(dit_strand_1) != len(dit_strand_2):
+            raise ValueError("Trit strings must be of the same length.")
+
+        result: str = ""
+
+        # Perform XOR on each pair of dits - each position is its own sum, nothing carries over to the next one
+        for dit_1, dit_2 in zip(dit_strand_1, dit_strand_2):
+            # Ensure we are dealing with actual valid numbers
+            if not dit_1.isdigit() or not dit_2.isdigit() or int(dit_1) >= mod or int(dit_2) >= mod:
+                raise ValueError(f"Invalid dit values: {dit_1}, {dit_2}. Trits must be in the range [0, {mod - 1}].")
+
+            # We always negate the sum so that strand 1 + strand 2 + parity = 0 (mod 3), the same as A ^ B ^ P = 0 in
+            #   binary XOR. This way any missing strand is recovered the same way: -(sum of the other two) mod 3.
+            result += str(-(int(dit_1) + int(dit_2)) % mod)
+
+        return result
+
+
+    def _get_parity_strand(self,
+                           payload_strand_1: str,
+                           payload_strand_2: str | None,
+                           previous_bases: list[str]) -> str:
+        """
+        Gets the parity strand for two payload strands. Since strand 1 + strand 2 + parity = 0 (mod 3), this is also how
+        we recover any missing strand: pass in the two strands we have and the previous base of the missing one last.
+
+        Args:
+            payload_strand_1: The first payload strand.
+            payload_strand_2: The second payload strand. None if there isn't one (odd number of payload strands), we
+              then XOR with a virtual strand of all 0 trits.
+            previous_bases: The previous bases to use for the columns. In lock step: previous_base_1, previous_base_2,
+              previous_base_parity. Without a second payload strand: previous_base_1, previous_base_parity.
+
+        Returns:
+            The parity strand as a DNA string.
+        """
+        # Get our previous bases - parity is always the last one in the block
+        previous_base_1: str = previous_bases[0]
+        previous_base_parity: str = previous_bases[-1]
+
+        # Convert to trits
+        trit_1: str = Goldman().dna_to_trit(payload_strand_1, previous_base_1)
+
+        # The virtual strand has to be all 0 trits, not all of one base - that would be a homopolymer in DNA
+        trit_2: str = "0" * len(trit_1)
+        if payload_strand_2 is not None:
+            trit_2 = Goldman().dna_to_trit(payload_strand_2, previous_bases[1])
+
+        # Perform our XOR (-(strand 1 + strand 2) mod 3) and convert back to DNA
+        parity_trit: str = self._XOR_mod(trit_1, trit_2, 3)
+        parity_strand: str = Goldman().trit_to_dna(parity_trit, previous_base_parity)
+
+        return parity_strand
+
+
+    def _payloads_complete(self, missing_indices: list[int], num_payload_strands: int) -> bool:
+        """
+        Checks if all the payload strands in a block are present. Covers nothing missing and only the parity strand
+        missing, since parity holds no data of its own.
+
+        Args:
+            missing_indices: The indices of the missing strands in the block.
+            num_payload_strands: The number of payload strands in the block. 2 for a full block, 1 for the last odd one.
+
+        Returns:
+            True if no payload strand is missing, False otherwise.
+        """
+        for index in missing_indices:
+            # Payload strands come first in the block, so any index before the parity is a missing payload strand
+            if index < num_payload_strands:
+                return False
+
+        return True
+
+
+    def _too_many_missing(self, missing_indices: list[int]) -> bool:
+        """
+        Checks if a block has more missing strands than we can recover. Each parity strand can only fill in one missing
+        strand, so more missing than parity strands (2 of the 3, or both in the last odd block) can't be recovered.
+
+        Args:
+            missing_indices: The indices of the missing strands in the block.
+
+        Returns:
+            True if there are more missing strands than parity strands, False otherwise.
+        """
+        return len(missing_indices) > self.parity_per_block
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    def add_redundancy(self, previous_sequences: list[str], payload_sequences: list[str]) -> list[str]:
+        """
+        Adds XOR parity strands to the payload sequences. Each parity strand is the XOR of two payload strands. We are
+        doing XOR with mod 3 rather than mod 2 because we are using Goldman encoding to preserve the homopolymer-free
+        property. 
+
+        Args:
+            previous_sequences: The previous bases to be used for the columns.
+            payload_sequences: The payload sequences to be put XOR parity on.
+
+        Returns:
+            A list of parity strands, where each parity strand is the XOR of two payload strands.
+        
+        Raises:
+            ValueError: If previous_sequences or payload_sequences is empty/None.
+            OuterCodeError: If there are not enough payload sequences to create parity strands.
+            MistmatchSegments: If there are not enough previous sequences for the payload and parity strands.
+            PayloadLengthError: If the payload length is 0.
+            NotEnoughPreviousSegments: If there are not enough previous sequences to create the required number of 
+                parity strands.
+        """
+        self._validate_segments(previous_sequences, payload_sequences)
+        # Ensure we have a positive payload length, otherwise we can't create parity strands
+        self._retrieve_payload_length(payload_sequences)
+
+        # Every data and parity strand needs its own reserved index. Parity strand will have its own base from our 
+        #   assumed indicies, so ensure we have enough of them to create the parity strand with the previous base.
+        if len(previous_sequences) < self.calculate_total_strands(len(payload_sequences)):
+            raise NotEnoughPreviousSegments(
+                message="Not enough previous sequences for the payload and parity strands"
+            )
+
+        parity_strands: list[str] = []
+
+        # Go through each pair of payload strands and create a parity strand for them. Previous sequences hold every
+        #   index laid out in blocks of [payload, payload, parity], so the blocks line up with each pair
+        for previous_block, payload_block in zip(*self._segment_to_blocks(previous_sequences, payload_sequences)):
+            # Get our first payload strand and its previous base for the column
+            payload_strand_1: str = payload_block[0]
+            # If we dont have a second payload strand, we will XOR with a virtual strand of all 0 trit
+            payload_strand_2: str | None = None
+            if len(payload_block) == self.payload_per_block:
+                payload_strand_2 = payload_block[1]
+            
+            # Take all the previous bases from our (presumed) indicies
+            previous_bases: list[str] = []
+            for sequence in previous_block[:len(payload_block) + self.parity_per_block]:
+                previous_bases.append(sequence[-1])
+    
+            # A missing second strand is a virtual strand of all 0 trits. It doesn't show up in our actual payload
+            #   strands, but the last payload still gets a parity strand for it
+            parity_strand: str = self._get_parity_strand(
+                payload_strand_1=payload_strand_1,
+                payload_strand_2=payload_strand_2,
+                previous_bases=previous_bases
+            )
+
+            parity_strands.append(parity_strand)
+
+        return parity_strands
+
+
+    @override
+    def perform_correction(self, 
+                           previous_sequences: list[str], 
+                           encoded_sequences: list[str | None]) -> list[str | None]:
+        """
+        Performs XOR error correction on the encoded sequences. Each parity strand is the XOR of two payload strands. If
+        one of the payload strands is missing, we can recover it using the parity strand and the other payload strand.
+
+        Args:
+            previous_sequences: The complete list of index sequences. These provide the preceding base needed to
+                convert each strand to and from trits. Assumed to be sorted. We regenerate any missing one, so no
+                worries about them being none from erasure
+            encoded_sequences: The list of encoded sequences we retrieve after decoding, including the parity strands.
+                We assume that sequences that are None are the ones marked for erasure. The sequences that are not None
+                are assumed to be correct and will be used to correct the others. Also assumes that the sequences are in
+                the same order as they were originally encoded (that is sorted by index).
+
+        Returns:
+            The list of corrected sequences without the parity strands. A block with more than one missing strand can't
+            be recovered, so its missing payload strands stay None.
+
+        Raises:
+            ValueError: If previous_sequences or encoded_sequences is empty/None.
+            PayloadLengthError: If the payload length is 0.
+            MistmatchSegments: If previous_sequences and encoded_sequences are not the same length.
+        """
+        self._validate_segments(previous_sequences, encoded_sequences)
+        self._retrieve_payload_length(encoded_sequences)
+
+        # Must be same length in this scenario
+        if len(previous_sequences) != len(encoded_sequences):
+            raise MismatchSegments(
+                message="Previous and encoded sequences must be the same length for performing correction"
+            )
+
+        # Some sequences we may not be able to correct. Returning None means those sequences are forever lost
+        corrected_sequences: list[str | None] = []
+
+        # Go through each block of [payload, payload, parity]. With an odd number of payload strands the last block is
+        #   only [payload, parity], the second payload being the virtual strand of all 0 trits
+        for block_start in range(0, len(encoded_sequences), self.block_strands):
+            # Get our blocks
+            previous_block: list[str] = previous_sequences[block_start:block_start + self.block_strands]
+            payload_block: list[str | None] = encoded_sequences[block_start:block_start + self.block_strands]
+
+            # Parity is always the last strand in the block, everything before it is payload
+            num_payload_strands: int = len(payload_block) - self.parity_per_block
+            corrected_block: list[str | None] = payload_block[:num_payload_strands]
+
+            # Find the indices of any missing sequences
+            missing_indices: list[int] = []
+            for index, payload_sequence in enumerate(payload_block):
+                if payload_sequence is None:
+                    missing_indices.append(index)
+
+            # Nothing to recover if all our payload strands are here, and we can't recover with more missing than parity
+            #   strands (the missing payload strands stay None). Either way we keep the payload strands as they are
+            if self._payloads_complete(missing_indices, num_payload_strands) or self._too_many_missing(missing_indices):
+                corrected_sequences.extend(corrected_block)
+                continue
+
+            # We have exactly one missing sequence, and it is a payload strand - the one we want to recover
+            missing_index: int = missing_indices[0]
+
+            # Get the strands we do have and their previous bases, in block order. In the last odd block this is only
+            #   the parity strand, so the virtual strand fills in as the second strand
+            present_strands: list[str] = []
+            previous_bases: list[str] = []
+            for previous_sequence, payload_sequence in zip(previous_block, payload_block):
+                if payload_sequence is not None:
+                    present_strands.append(payload_sequence)
+                    previous_bases.append(previous_sequence[-1])
+
+            # The missing strand's previous base goes last (our calculated new parity)
+            previous_bases.append(previous_block[missing_index][-1])
+
+            # Get our present payload strands, the second one may be None if we are in the last odd block
+            payload_strand_1: str = present_strands[0]
+            payload_strand_2: str | None = None
+            if len(present_strands) == self.payload_per_block:
+                payload_strand_2 = present_strands[1]
+
+            # Same as making the parity strand: -(sum of the other two) mod 3 gives back whichever strand is missing.
+            #   The missing strand must be a payload strand, so we put it in the correct block
+            corrected_block[missing_index] = self._get_parity_strand(
+                payload_strand_1=payload_strand_1,
+                payload_strand_2=payload_strand_2,
+                previous_bases=previous_bases
+            )
+
+            corrected_sequences.extend(corrected_block)
+
+        return corrected_sequences
+
+    
+    @override
     def calculate_total_strands(self, payload_strands: int) -> int:
-        # Each 2 payload strands will create 1 parity strand, so we need to round up to the nearest even number of payload strands.
+        """
+        Return the payload and parity strands for the payload strand count.
+
+        Args:
+            payload_strands: The number of payload strands to be encoded with XOR parity.
+
+        Returns:
+            The total number of strands after adding XOR parity.
+
+        Raises:
+            ValueError: If payload_strands is not positive.
+        """
         if payload_strands <= 0:
             raise ValueError("Payload strand count must be positive.")
-        
-        return payload_strands + (payload_strands + 1) // 2
+
+        # Every 2 payload strands get 1 parity strand. An odd last payload strand is paired with the virtual strand of
+        #   all 0 trits, so it still gets its own parity strand - rounding the parity count up
+        self.num_blocks = (payload_strands + 1) // 2
+
+        return payload_strands + self.num_blocks
 
 
-    def select_payload_indices(self, indices: List[str]) -> List[str]:
-        if not indices:
-            raise ValueError("Indices cannot be empty.")
 
-        payload_indices: List[str] = []
-        for block_start in range(0, len(indices), 3):
-            block: List[str] = indices[block_start:block_start + 3]
+class DirectDNAXOR(XOR):
+    """
+    Implements a simple XOR-based error correction scheme on the DNA itself. For encodings that allow homopolymers we
+    cannot convert "GGG" from Goldman trits and back as the rotation scheme doesnt allow for it. Instead each base is
+    directly a base-4 digit (quat) and each parity strand is the XOR of two payload strands (mod 4). The blocks,
+    correction and odd last block all work the same as XOR, only the conversion between DNA and digits changes -
+    previous bases are not needed. The parity strands can have homopolymers.
+    """
 
-            # Add the first 2 indices from the block to the payload_indices list
-            payload_indices += block[:2]
-        
-        return payload_indices
+    def __init__(self):
+        """
+        Initializes the DirectDNAXOR, same blocks as XOR: 2 payload strands and 1 parity strand.
+        """
+        super().__init__()
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    def _dna_to_quats(self, dna_sequence: str) -> str:
+        """
+        Converts DNA bases directly into a quat string, each base being its own base-4 digit.
+
+        Args:
+            dna_sequence: The DNA bases to be converted.
+
+        Returns:
+            The quat string of the DNA bases.
+        """
+        quats: str = ""
+        for base in dna_sequence:
+            quats += str(OuterCodes.DNA_TO_DIGIT[base])
+
+        return quats
+
+
+    def _quats_to_dna(self, quats: str) -> str:
+        """
+        Converts a quat string directly back into DNA bases.
+
+        Args:
+            quats: The quat string to be converted.
+
+        Returns:
+            The DNA bases of the quat string.
+        """
+        dna_sequence: str = ""
+        for quat in quats:
+            dna_sequence += OuterCodes.DIGIT_TO_DNA[int(quat)]
+
+        return dna_sequence
+
+
+    @override
+    def _get_parity_strand(self,
+                           payload_strand_1: str,
+                           payload_strand_2: str | None,
+                           *args, **kwargs) -> str:
+        """
+        Gets the parity strand for two payload strands. Since strand 1 + strand 2 + parity = 0 (mod 4), this is also how
+        we recover any missing strand: pass in the two strands we have.
+
+        Args:
+            payload_strand_1: The first payload strand.
+            payload_strand_2: The second payload strand. None if there isn't one (odd number of payload strands), we
+              then XOR with a virtual strand of all 0 quats.
+            *args and **kwargs, used to maintain polymorphism with the XOR class, but not used in this method.
+
+        Returns:
+            The parity strand as a DNA string.
+        """
+        quat_1: str = self._dna_to_quats(payload_strand_1)
+
+        # The virtual strand is all 0 quats (all As) - homopolymers are fine here
+        quat_2: str = "0" * len(quat_1)
+        if payload_strand_2 is not None:
+            quat_2 = self._dna_to_quats(payload_strand_2)
+
+        # Perform our XOR (-(strand 1 + strand 2) mod 4) and convert back to DNA
+        parity_quat: str = self._XOR_mod(quat_1, quat_2, 4)
+
+        return self._quats_to_dna(parity_quat)
+
 
 
 class RSOuter(OuterCodes):
@@ -115,11 +686,14 @@ class RSOuter(OuterCodes):
         if not (0 < redundancy_percentage <= 1):
             raise ValueError("Redundancy percentage must be greater than 0 and at most 1.")
 
+        super().__init__()
+
         self.redundancy_percentage: float = redundancy_percentage
 
         # Redundancy is measured relative to data strands, not the complete codeword.
         self.payload_per_block: int = int(self.MAX_BLOCK_STRANDS / (1 + redundancy_percentage))
         self.parity_per_block: int = self.MAX_BLOCK_STRANDS - self.payload_per_block
+        self.block_strands: int = self.MAX_BLOCK_STRANDS
         self.rs: galois.ReedSolomon = self._get_rs(self.payload_per_block, self.parity_per_block)
 
         self.num_blocks: int = 0
@@ -150,6 +724,7 @@ class RSOuter(OuterCodes):
     #--------------------------------------------------------------------------#
 
 
+    @override
     @staticmethod
     def align_payload_length(payload_length: int) -> int:
         """
@@ -166,7 +741,7 @@ class RSOuter(OuterCodes):
 
 
     @staticmethod
-    def trits_to_field_symbol(trits: List[int]) -> int:
+    def trits_to_field_symbol(trits: list[int]) -> int:
         """
         Converts six trits into one GF(3^6) symbol (basically trit to decimal with a list)
 
@@ -274,62 +849,6 @@ class RSOuter(OuterCodes):
         )
 
 
-    def _validate_segments(self,
-                           previous_segments: List[str] | List[str | None], 
-                           payload_segments: List[str] | List[str | None]) -> None:
-        """
-        Validates the previous and payload segments for Reed-Solomon error correction.
-
-        Args:
-            previous_segments: The previous bases to be used for the columns.
-            payload_segments: The payload segments to be put RS parity on.
-
-        Raises:
-            ValueError: If previous_segments or payload_segments is empty/None.
-            MismatchSegments: If there are not enough previous sequences for the payload and parity strands.
-        """
-        if not previous_segments:
-            raise ValueError("Previous segments cannot be empty.")
-        if not payload_segments:
-            raise ValueError("Payload segments cannot be empty.")
-        if len(previous_segments) < len(payload_segments):
-            raise MismatchSegments(
-                message="There must be at least one previous sequence for each payload sequence"
-            )
-
-
-    def _segment_to_blocks(self, 
-                           previous_segments: List[str], 
-                           payload_segments: List[str]) -> tuple[List[List[str]], List[List[str]]]:
-        """
-        Segments are split into blocks of data_capacity strands - basically each segment into its own block.
-        
-        Args:
-            previous_segments: The previous bases to be used for the columns.
-            payload_segments: The payload segments to be put RS parity on.
-
-        Returns:
-            A tuple containing the previous blocks and the payload blocks.
-
-        Raises:
-            ValueError: If previous_segments or payload_segments is empty/None.
-        """
-        self._validate_segments(previous_segments, payload_segments)
-
-        # Our previous blocks (likely our indices) need to be the entire block length as each strand will need its own
-        #   index. The payload blocks will be the data_capacity length as we will add parity_strands to each block.
-        previous_blocks: List[List[str]] = []
-        for index in range(0, len(previous_segments), self.MAX_BLOCK_STRANDS):
-            previous_blocks.append(previous_segments[index:index + self.MAX_BLOCK_STRANDS])
-
-        # Payload blocks are up to the payload_per_block length
-        payload_blocks: List[List[str]] = []
-        for index in range(0, len(payload_segments), self.payload_per_block):
-            payload_blocks.append(payload_segments[index:index + self.payload_per_block])
-
-        return previous_blocks, payload_blocks
-
-
     def _dna_to_field_symbol(self, dna_sequence: str, previous_base: str) -> int:
         """
         Converts one Goldman-encoded DNA column into a GF(3^6) symbol.
@@ -341,7 +860,7 @@ class RSOuter(OuterCodes):
         Returns:
             The GF(3^6) symbol corresponding to the DNA sequence.
         """
-        trits: List[int] = []
+        trits: list[int] = []
         for trit in Goldman().dna_to_trit(dna_sequence, previous_base):
             trits.append(int(trit))
 
@@ -372,41 +891,9 @@ class RSOuter(OuterCodes):
         return dna_sequence
 
 
-    def _retrieve_payload_length(self, payload_segments: List[str] | List[str | None]) -> int:
-        """
-        Retrieves the length of the payload segments.
-
-        Args:
-            payload_segments: The payload segments to be put RS parity on.
-
-        Returns:
-            The length of the payload segments.
-
-        Raises:
-            ValueError: If payload_segments is empty/None.
-            PayloadLengthError: If the payload length is 0.
-        """
-        if not payload_segments:
-            raise ValueError("Payload segments cannot be empty.")
-
-        # Get the next payload sequence that isn't none, if we don't find one, then the payload length is 0 and we 
-        #   should raise an error, regardless if we allowing None's or not - we need them to have a length
-        payload_length: int = next(
-            (len(segment) for segment in payload_segments if segment is not None), 
-            0
-        )
-        if payload_length == 0:
-            raise PayloadLengthError(
-                message="Payload segments must have a positive length",
-                payload_length=payload_length
-            )
-
-        return payload_length
-
-
     def _retrieve_columns(self,
-                          previous_segments: List[str], 
-                          payload_segments: List[str] | List[str | None],
+                          previous_segments: list[str], 
+                          payload_segments: list[str] | list[str | None],
                           error_on_none: bool = False) -> list[list[galois.FieldArray]]:
         """
         Retrieves the columns of bases from the previous bases and payload segments.
@@ -431,11 +918,11 @@ class RSOuter(OuterCodes):
         # Need to know payload legnth
         payload_length: int = self._retrieve_payload_length(payload_segments)
 
-        columns: List[List[galois.FieldArray]] = []
+        columns: list[list[galois.FieldArray]] = []
 
         # Each six-base DNA slice becomes one GF(3^6) symbol for RS encoding.
         for index in range(0, payload_length, RSOuter.COLUMN_LENGTH):
-            column: List[galois.FieldArray] = []
+            column: list[galois.FieldArray] = []
 
             # Collect the same six-base position from every data strand.
             for segment_index, segment in enumerate(payload_segments):
@@ -471,7 +958,7 @@ class RSOuter(OuterCodes):
         return columns
 
 
-    def _get_erasure_mask(self, payload_block: List[str | None], ) -> List[bool]:
+    def _get_erasure_mask(self, payload_block: list[str | None], ) -> list[bool]:
         """
         Creates an erasure mask for the given sequences. True indicates an erasure (None), and False indicates a valid 
         sequence.
@@ -483,7 +970,7 @@ class RSOuter(OuterCodes):
             A list of booleans representing the erasure mask.
         """
         # Get the erasure mask - everywhere they are are 
-        erasure_mask: List[bool] = []
+        erasure_mask: list[bool] = []
         for sequence in payload_block:
             if sequence is None:
                 erasure_mask.append(True)
@@ -497,7 +984,7 @@ class RSOuter(OuterCodes):
     def _fill_erasures(self,
                        rs: galois.ReedSolomon,
                        codewords: galois.FieldArray,
-                       erasure_mask: List[bool]) -> galois.FieldArray | None:
+                       erasure_mask: list[bool]) -> galois.FieldArray | None:
         """
         Fills in the erased symbols of every column in a block at once. Galois' decoder is very very slow whenever
         there is an erasure that is not known (all are known to us), but when we only have erasures (the other strands 
@@ -523,27 +1010,27 @@ class RSOuter(OuterCodes):
         if erased.size > rs.n - rs.k:
             return None
 
-        # Galois computes H (the parity-check matrix) once per RS code. A shortened (last) block drops its leading 
+        # Galois computes H (the parity-check matrix) once per RS code. A shortened (thelast) block drops its leading 
         #   message positions, so it uses the last block_strands columns of H. Keeping one row/equation per erasure
         block_strands: int = codewords.shape[1]
         parity_check: galois.FieldArray = self.GF(rs.H[:erased.size, -block_strands:])
 
-        # Each row of H is one check (equation) that a valid codeword passes: multiply every strand's symbol by that
-        #   row's number for the strand, add them all up, and the total is always 0. For example, with 4 strands where
+        # Each row of H is one check (equation) that a valid codeword passes: we multiply every strands symbol by that
+        #   rows number for the strand, add them all up, and the total is will be 0. For example, with 4 strands where
         #   strand 2 is erased (x) and one check row [h0, h1, h2, h3]:
-        #       h0*s0 + h1*s1 + h2*x + h3*s3 = 0
+        #       h0 * s0 + h1 * s1 + h2 * x + h3 * s3 = 0
         #   We know s0, s1 and s3, so we can add up their part now and move it to the other side:
-        #       h2*x = -(h0*s0 + h1*s1 + h3*s3)
-        #   This line computes that righ hand side, the "-(h0*s0 + h1*s1 + h3*s3)", for every check row and every
+        #       h2*x = -(h0 * s0 + h1 * s1 + h3 * s3)
+        #   This computes that righ hand side, the "-(h0 * s0 + h1 * s1 + h3 * s3)", for every check row and every 
         #   column at once. matmul does the multiply and add for us (in GF(3^6) math, not normal integer math). The
-        #   codewords are transposed (.T) because matmul pairs each row of the first matrix with each column of the
-        #   second, so the strands of each codeword need to run down a column to line up with the strands in H's rows.
-        #   The result is a (erasures, columns) table: one total per check, per codeword column.
+        #   codewords are transposed because matmul pairs each row of the first matrix with each column of the second
+        #   matrix, so the strands of each codeword need to run down a column to line up with the strands in H's rows.
+        #   The result is a (erasures, columns) table, one total per check per codeword column.
         right_side: galois.FieldArray = -np.matmul(parity_check[:, known], codewords[:, known].T)
 
         # Now we have one equation per check with only the erased symbols unknown, e.g. with 2 erasures (x, y):
-        #       a*x + b*y = r0
-        #       c*x + d*y = r1
+        #       a * x + b * y = r0
+        #       c * x + d * y = r1
         #   where a, b, c, d are H's numbers for the erased strands and r0, r1 come from right_side. Same number of
         #   equations as unknowns, so like solving a system of equations in algebra, there is exactly one answer, and
         #   that answer is the missing symbols. solve does this for every column at once, giving a (erasures, columns)
@@ -564,7 +1051,7 @@ class RSOuter(OuterCodes):
     #--------------------------------------------------------------------------#
 
 
-    def add_redundancy(self, previous_sequences: List[str], payload_sequences: List[str]) -> List[str]:
+    def add_redundancy(self, previous_sequences: list[str], payload_sequences: list[str]) -> list[str]:
         """
         Adds Reed-Solomon parity strands into each block. Basically we take the payload strands and add parity strands 
         to them column by column. Each column is 6 bases long and gives us a GF(3^6) symbol (6 digits in base 3). We use
@@ -593,7 +1080,7 @@ class RSOuter(OuterCodes):
                 message="Not enough previous sequences for the payload and parity strands"
             )
 
-        parity_strands: List[str] = []
+        parity_strands: list[str] = []
 
         previous_blocks, payload_blocks = self._segment_to_blocks(previous_sequences, payload_sequences)
         for previous_block, payload_block in zip(previous_blocks, payload_blocks):
@@ -604,7 +1091,7 @@ class RSOuter(OuterCodes):
             rs: galois.ReedSolomon = self._get_rs(payload_count, parity_per_block)
 
             # Get our columns for this block, which is a all the GF symbols - if we got none we got a problem
-            columns: List[List[galois.FieldArray]] = self._retrieve_columns(
+            columns: list[list[galois.FieldArray]] = self._retrieve_columns(
                 previous_segments=previous_block, 
                 payload_segments=payload_block,
                 error_on_none=True
@@ -612,10 +1099,10 @@ class RSOuter(OuterCodes):
 
             # Each output entry is one parity strand assembled column by column, so we need to initalize them all first
             #   in order to ensure we can append to them in correct order
-            parity_block: List[str] = [""] * parity_per_block
+            parity_block: list[str] = [""] * parity_per_block
 
             # We need to keep track of the last base - currently its all the indexes (we assume)
-            parity_previous_bases: List[str] = []
+            parity_previous_bases: list[str] = []
             for index in range(parity_per_block):
                 parity_previous_bases.append(previous_block[payload_count + index][-1])
         
@@ -644,8 +1131,8 @@ class RSOuter(OuterCodes):
 
 
     def perform_correction(self,
-                           previous_sequences: List[str], 
-                           encoded_sequences: List[str | None] ) -> List[str | None]:
+                           previous_sequences: list[str], 
+                           encoded_sequences: list[str | None] ) -> list[str | None]:
         """
         Performs Reed-Solomon error correction on the encoded sequences.
 
@@ -676,18 +1163,18 @@ class RSOuter(OuterCodes):
             )
 
         # Some sequences we may not be able to correct, unlikely. Returning None means those sequences are forever lost
-        corrected_sequences: List[str | None] = []
+        corrected_sequences: list[str | None] = []
 
         # Go through each block and correct one at at time, ending block (likely not full) will be handled the same
         for block_start in range(0, len(encoded_sequences), self.MAX_BLOCK_STRANDS):
             # Get the block of previous sequences and encoded sequences for this RS block
-            previous_block: List[str] = previous_sequences[block_start:block_start + self.MAX_BLOCK_STRANDS]
-            payload_block: List[str | None] = encoded_sequences[block_start:block_start + self.MAX_BLOCK_STRANDS]
+            previous_block: list[str] = previous_sequences[block_start:block_start + self.MAX_BLOCK_STRANDS]
+            payload_block: list[str | None] = encoded_sequences[block_start:block_start + self.MAX_BLOCK_STRANDS]
 
-            erasure_mask: List[bool] = self._get_erasure_mask(payload_block)
+            erasure_mask: list[bool] = self._get_erasure_mask(payload_block)
 
             # Get the columns for this block, which is a all the GF symbols
-            columns: List[List[galois.FieldArray]] = self._retrieve_columns(
+            columns: list[list[galois.FieldArray]] = self._retrieve_columns(
                 previous_segments=previous_block, 
                 payload_segments=payload_block,
                 error_on_none=False
@@ -699,7 +1186,7 @@ class RSOuter(OuterCodes):
             parity_per_block: int = len(payload_block) - data_count
             rs: galois.ReedSolomon = self._get_rs(data_count, parity_per_block)
             
-            corrected_block: List[str] = [""] * data_count
+            corrected_block: list[str] = [""] * data_count
             block_failed: bool = False
 
             # Fill the erasures of every column at once. The strands that aren't None passed the checksum, so this is
@@ -791,34 +1278,6 @@ class RSOuter(OuterCodes):
         return total_strands
 
 
-    def select_payload_indices(self, indices: List[str]) -> List[str]:
-        """
-        Remove parity indices from each RS block before payload encoding.
-
-        The returned indices retain their original block order, so each payload segment is encoded with the same 
-        predecessor it will have in  the final framed data.
-
-        Args:
-            indices: The complete list of indices, including both payload and parity indices.
-
-        Returns:
-            A list of indices that are used for payload encoding, with parity indices removed.
-
-        Raises:
-            ValueError: If indices is empty or None.
-        """
-        if not indices:
-            raise ValueError("Indices cannot be empty.")
-
-        payload_indices: List[str] = []
-        for block_start in range(0, len(indices), self.MAX_BLOCK_STRANDS):
-            block: List[str] = indices[block_start:block_start + self.MAX_BLOCK_STRANDS]
-
-            # Add the first payload_per_block indices from the block to the payload_indices list
-            payload_indices += block[:self.payload_per_block]
-        
-        return payload_indices
-
 
 class DirectDNARSOuter(RSOuter):
     """
@@ -854,14 +1313,6 @@ class DirectDNARSOuter(RSOuter):
     # Use the maximum Reed-Solomon codeword length supported by GF(4096)
     MAX_BLOCK_STRANDS: int = GF_ORDER - 1
 
-    DNA_TO_DIGIT: Final[dict[str, int]] = {
-        "A": 0,
-        "C": 1,
-        "G": 2,
-        "T": 3,
-    }
-    DIGIT_TO_DNA: Final[dict[int, str]] = {v: k for k, v in DNA_TO_DIGIT.items()}
-
 
     #--------------------------------------------------------------------------#
     #                                                                          #
@@ -884,7 +1335,7 @@ class DirectDNARSOuter(RSOuter):
         """
         symbol: int = 0
         for base in dna_sequence:
-            symbol = symbol * 4 + self.DNA_TO_DIGIT[base]
+            symbol = symbol * 4 + OuterCodes.DNA_TO_DIGIT[base]
 
         return symbol
 
@@ -907,6 +1358,6 @@ class DirectDNARSOuter(RSOuter):
             digit: int = symbol % 4
             symbol //= 4
             # Prepend each least-significant base so the final sequence stays in its original left-to-right order.
-            bases = self.DIGIT_TO_DNA[digit] + bases
+            bases = OuterCodes.DIGIT_TO_DNA[digit] + bases
 
         return bases

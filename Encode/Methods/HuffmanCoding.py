@@ -443,9 +443,9 @@ class Huffman(Encoding):
 
     @override
     def decode_segments(self, 
-                        encoded_data: list[str], 
+                        encoded_data: list[str | None], 
                         huffman_codes: dict[str, str], 
-                        *args, **kwargs) -> list[str]:
+                        *args, **kwargs) -> list[str | None]:
         """
         Decodes the encoded data using the provided Huffman codes.
 
@@ -457,8 +457,13 @@ class Huffman(Encoding):
         Returns:
             The decoded data as a list of strings, where each string corresponds to a decoded segment.
         """
-        decoded_segments: list[str] = []
+        decoded_segments: list[str | None] = []
         for segment in encoded_data:
+            # Skip data we couldn't correct for
+            if segment is None:
+                decoded_segments.append(None)
+                continue
+
             decoded_segment: str = self.decode(segment, huffman_codes)
             decoded_segments.append(decoded_segment)
         return decoded_segments
@@ -872,16 +877,24 @@ class BitScanQuaternary(Quaternary):
 
 
     @override 
-    def decode_segments(self, encoded_data: list[str], huffman_codes: dict[str, str], *args, **kwargs) -> list[str]:
+    def decode_segments(self, 
+                        encoded_data: list[str | None], 
+                        huffman_codes: dict[str, str], 
+                        *args, **kwargs) -> list[str | None]:
         # Get our decoded segments (will be in binary form)
-        decoded_segments: list[str] = super().decode_segments(encoded_data, huffman_codes, *args, **kwargs)
+        decoded_segments: list[str | None] = super().decode_segments(encoded_data, huffman_codes, *args, **kwargs)
         
-        ascii_segments: list[str] = []
+        ascii_segments: list[str | None] = []
         remainder: str = ""
 
         # For every segment, append the remainder from the last segment and convert to ascii, then save the new 
         #   remainder for the next segment
         for segment in decoded_segments:
+            # Skip undecodable segments, we will just return None for those
+            if segment is None:
+                ascii_segments.append(None)
+                continue
+
             decoded_data: str = remainder + segment
 
             # Gets the length of the complete bits (multiple of 8)
@@ -1052,21 +1065,27 @@ class Pgram(Huffman):
         if len(segment) == 0:
             raise ValueError("Segment length must be greater than 0")
 
-        # Get the padding character from the Huffman codes
+        # Get the padding character from the Huffman codes, and its complement for the complementary tree
         padding_code: str = huffman_codes[Huffman.CHUNKING_PADDING_CHAR]
+        complement_code: str = ""
+        for base in padding_code:
+            complement_code += self.COMPLEMENT[base]
 
-        new_padding_code: str = ""
-        # If segments last character is the same as padding character, take the complement of the entire padding char
-        if segment[-1] == padding_code[0]:
-            for base in padding_code:
-                new_padding_code += self.COMPLEMENT[base]
-            padding_code = new_padding_code
-            
-        if len(segment) < payload_length:
-            padding_length: int = payload_length - len(segment)
-            segment += padding_code * padding_length
-        segment = segment[:payload_length]
-        
+        # Same as _build_optimal_coding: after an even base (G/T) the next code starts complemented (A/C)
+        is_complementary: bool = segment[-1] in self.EVEN
+
+        padding: str = ""
+        while len(segment) + len(padding) < payload_length:
+            code: str = complement_code if is_complementary else padding_code
+            padding += code
+
+            # An odd length code ends on the same level it started, so the next copy has to swap - otherwise repeating
+            #   the same copy can put the same base on both sides of the boundary (a homopolymer)
+            if len(code) % 2 == 1:
+                is_complementary = not is_complementary
+
+        segment = (segment + padding)[:payload_length]
+
         return segment
 
 
@@ -1395,10 +1414,10 @@ class Pgram(Huffman):
 
     @override
     def decode_segments(self, 
-                        encoded_data: list[str], 
+                        encoded_data: list[str | None], 
                         huffman_codes: dict[str, str], 
                         reverse: bool = True,
-                        *args, **kwargs) -> list[str]:
+                        *args, **kwargs) -> list[str | None]:
         """
         Decodes the encoded data using the provided Huffman codes.
 
@@ -1417,10 +1436,15 @@ class Pgram(Huffman):
         complement_codes: dict[str, str] = {}
         huffman_codes, complement_codes = self._get_codes(huffman_codes, reverse=reverse)
         
-        decoded_data: list[str] = []
+        decoded_data: list[str | None] = []
 
         # For every segment, decode it and append to the decoded data
         for segment in encoded_data:
+            # Skip data we couldn't error correct on
+            if segment is None:
+                decoded_data.append(None)
+                continue
+
             decoded_segment: str = self._decode_part(huffman_codes, complement_codes, segment)
             decoded_data.append(decoded_segment)
 
@@ -1718,10 +1742,10 @@ class Goldman(Huffman):
 
     @override
     def decode_segments(self, 
-                        encoded_data: list[str], 
+                        encoded_data: list[str | None], 
                         huffman_codes: dict[str, str],
                         *,
-                        previous_sequences: list[str]) -> list[str]:
+                        previous_sequences: list[str]) -> list[str | None]:
         """
         Decodes the encoded data with Goldman's rotating tree approach using the provided Huffman codes and a specified
         starting base.
@@ -1732,17 +1756,21 @@ class Goldman(Huffman):
             previous_sequences: A list of previous sequences (like the index or primer) for the mapping.
 
         Returns:
-            A list of strings, where each string corresponds to a decoded segment.
+            A list of strings, where each string corresponds to a decoded segment. If it couldnt be decoded, it is None.
 
         Raises:
             EncodingError: If a base is not found in the rotating map complement or if the start base is not valid.
             IndexingError: If there are not enough previous sequences or if the sequence length is too small.
         """
 
-        decoded_segments: list[str] = []
+        decoded_segments: list[str | None] = []
 
         # Append the trit segments to a list with being aware what starting base we are using for each segment
         for index, segment in enumerate(encoded_data):
+            if segment is None:
+                decoded_segments.append(None)
+                continue
+
             # Must have enough previous sequences to cover the number of segments we are decoding, and the sequence 
             #   length must be longer than 0 so we can get last base
             if index >= len(previous_sequences) or 0 >= len(previous_sequences[index]):

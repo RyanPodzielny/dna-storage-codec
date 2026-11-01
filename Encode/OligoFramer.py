@@ -8,7 +8,7 @@ file content.
 
 import math
 from reedsolo import ReedSolomonError
-from typing import Any, Generator
+from typing import Any, Generator, List, Sequence
 from pathlib import Path
 from Encode.Helpers.Errors import Error, ExpectedLengthError, IndexingError, NotEnoughPreviousSegments, PayloadLengthError, RankError
 from Encode.Methods.Encoding import Encoding
@@ -662,6 +662,7 @@ class OligoFramer:
                 yield ("", "", "", "")
 
 
+
     def correct_all_oligos(self, framed_oligos: list[str]) -> list[str | None]:
         """
         Decodes all framed oligos back into the original file content.
@@ -746,7 +747,17 @@ class OligoFramer:
             num_nones: int = sum(1 for segment in payload_segments if segment is None)
             print(f"After outer correction, {num_nones} segments are still None.")
 
-        decoded_segments = self.encoder.decode_segments(encoded_data=payload_segments, huffman_codes=self.huffman_codes)
+        # Rotation based encoders (Goldman) need the base before each payload, same indices we used when encoding.
+        #   Outer correction removed the parity strands, so drop their indices too
+        payload_indices: list[str] = indices
+        if self.outer_correction:
+            payload_indices = self.outer_correction.select_payload_indices(indices)
+
+        decoded_segments = self.encoder.decode_segments(
+            encoded_data=payload_segments,
+            huffman_codes=self.huffman_codes,
+            previous_sequences=payload_indices
+        )
 
         thing = "".join(decoded_segments) # type: ignore
         print(thing)

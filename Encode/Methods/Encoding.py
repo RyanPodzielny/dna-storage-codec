@@ -7,10 +7,10 @@ count runs of DNA bases in the encoded data. Most methods are abstract and shoul
 define specific encoding strategies.
 """
 
+
+import json
 from abc import abstractmethod
 from typing import Final, Any
-import json
-
 from Encode.Helpers.Errors import JSONError
 
 
@@ -53,6 +53,7 @@ class Encoding:
     REVERSE_DNA_MAP: Final[dict[str, str]] = {v: k for k, v in DNA_MAP.items()}
 
     BINARY_SYMBOLS: Final[set[str]] = {'0', '1'}
+    TRINARY_SYMBOLS: Final[set[str]] = {'0', '1', '2'}
 
     # JSON keys for saving and reading encoded data
     ENCODED_DATA: Final[str] = "encoded_data"
@@ -167,9 +168,9 @@ class Encoding:
 
 
     @abstractmethod
-    def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
+    def decode_segments(self, encoded_data: list[str | None], *args, **kwargs) -> list[str | None]:
         raise NotImplementedError()
-
+    
 
     @abstractmethod
     def decode(self, data: str, *args, **kwargs) -> str:

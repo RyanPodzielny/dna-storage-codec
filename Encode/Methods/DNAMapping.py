@@ -6,8 +6,8 @@ strings. It also includes methods for encoding and decoding files, as well as ca
 Uses both standard DNA mapping and Huffman coding for compression.
 """
 
-from typing import Any, Final, override
-from Encode.Helpers.Errors import EncodingError, PayloadLengthError
+from typing import Any, Final, List, override
+from Encode.Helpers.Errors import PayloadLengthError
 from Encode.Methods.Encoding import Encoding
 from Encode.Methods.HuffmanCoding import Huffman
 
@@ -103,7 +103,7 @@ class DNAMap(Encoding):
         return segment
 
 
-    def _decode_binary_segments(self, encoded_data: list[str]) -> list[str]:
+    def _decode_binary_segments(self, encoded_data: list[str | None]) -> list[str | None]:
         """
         Decodes a list of DNA segments back into binary strings.
 
@@ -117,15 +117,13 @@ class DNAMap(Encoding):
             EncodingError: If any of the DNA segments are empty.
             KeyError: If the DNA segments contain characters not in the reverse DNA map.
         """
-        binary_segments: list[str] = []
+        binary_segments: list[str | None] = []
 
         # Go through each segment and decode back to binary (decoding each ascii does not work here, need entire string)
         for segment in encoded_data:
             if not segment:
-                raise EncodingError(
-                    message="DNA segment cannot be empty.",
-                    encoding_method=self.__class__.__name__,
-                )
+                binary_segments.append(None)
+                continue
             
             binary_segment: str = ""
             # Add the binary representation of each base in the segment to the binary_segment string
@@ -273,7 +271,7 @@ class DNAMap(Encoding):
 
 
     @override
-    def decode_segments(self, encoded_data: list[str], *args, **kwargs) -> list[str]:
+    def decode_segments(self, encoded_data: list[str | None], *args, **kwargs) -> list[str | None]:
         """
         Decodes a list of DNA segments back to a list of ASCII strings.
 
@@ -282,20 +280,25 @@ class DNAMap(Encoding):
             *args and **kwargs are used to keep polymorphism with other decoding methods.
 
         Returns:
-            A list of ASCII strings corresponding to the decoded DNA segments.
+            A list of ASCII strings corresponding to the decoded DNA segments. None if the segment was couldn't be 
+            decoded.
 
         Raises:
             ValueError: If any of the DNA segments are empty or contain invalid characters.
             KeyError: If the DNA segments contain characters not in the reverse DNA map.
         """
         # Decode the DNA segments back to binary segments
-        binary_segments: list[str] = self._decode_binary_segments(encoded_data)
+        binary_segments: list[str | None] = self._decode_binary_segments(encoded_data)
 
-        ascii_segments: list[str] = []
+        ascii_segments: list[str | None] = []
         remainder: str = "" 
 
         # For each binary seg, convert back to ascii
         for segment in binary_segments:
+            if segment is None:
+                ascii_segments.append(None)
+                continue
+
             # Ensure to add the remainder from the previous segment to the current segment before converting to ascii
             decoded_data: str = remainder + segment
 
@@ -307,7 +310,7 @@ class DNAMap(Encoding):
             remainder = decoded_data[complete_bit_length:]
 
         # Remove any padding from the last segment if it was added during encoding
-        if len(ascii_segments) > 0:
+        if len(ascii_segments) > 0 and ascii_segments[-1] is not None:
             ascii_segments[-1] = ascii_segments[-1].rstrip(DNAMap.CHUNKING_PADDING_CHAR)
 
         return ascii_segments
@@ -593,7 +596,10 @@ class DNAMapHuffman(DNAMap):
 
 
     @override
-    def decode_segments(self, encoded_data: list[str], huffman_codes: dict[str, str], *args, **kwargs) -> list[str]:
+    def decode_segments(self, 
+                        encoded_data: list[str | None], 
+                        huffman_codes: dict[str, str], 
+                        *args, **kwargs) -> list[str | None]:
         """
         Decodes a list of DNA segments back to a list of ASCII strings using Huffman coding.
 
@@ -609,10 +615,15 @@ class DNAMapHuffman(DNAMap):
             KeyError: If the input data contains keys that are not expected.
         """
 
-        binary_segments: list[str] = self._decode_binary_segments(encoded_data)
-        ascii_segments: list[str] = []
+        binary_segments: list[str | None] = self._decode_binary_segments(encoded_data)
+        ascii_segments: list[str | None] = []
 
         for segment in binary_segments:
+            # Skip segements that we couldn't decode
+            if segment is None:
+                ascii_segments.append(None)
+                continue
+
             # Each encoded segment has one final bit added to make its DNA length even.
             ascii_segments.append(Huffman().decode(segment[:-1], huffman_codes))
 
