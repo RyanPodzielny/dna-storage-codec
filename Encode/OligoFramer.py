@@ -8,9 +8,9 @@ file content.
 
 import math
 from reedsolo import ReedSolomonError
-from typing import Any, Generator, List, Sequence
+from typing import Any, Generator
 from pathlib import Path
-from Encode.Helpers.Errors import Error, ExpectedLengthError, IndexingError, NotEnoughPreviousSegments, PayloadLengthError, RankError
+from Encode.Helpers.Errors import Error, ExpectedLengthError, IndexingError, PayloadLengthError
 from Encode.Methods.Encoding import Encoding
 from Encode.Indexer import Indexer
 from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
@@ -546,31 +546,14 @@ class OligoFramer:
         # Extend the amount of indicides/width of the index until we are sure we will have enough for num of segments
         indices, huffman_codes, encoded_segments = self._extend_indices()
 
-        # If we have outer correction, we need to add the parity segments to the end of the payload segments, so that they are all in order
+        # If we have outer correction, we need to add the parity segments to the payload segments, so that they are all
+        #   in order. The outer code decides the order (and if the payload strands are framed at all)
         if self.outer_correction:
             # Get our parity segments - these are the extra strands
-            parity_segments = self.outer_correction.add_redundancy(indices, encoded_segments)
-
-            # Split on number of parity segments
-            blocked_parity_segments: list[list[str]] = []
-
-            for index in range(0, len(parity_segments), self.outer_correction.parity_per_block):
-                blocked_parity_segments.append(parity_segments[index:index + self.outer_correction.parity_per_block])
-
-            # Now travel through each block of payload segments and add the parity segments to the end of each block,
-            #   so that they all stay in order
-            encoded_segments_with_parity: list[str] = []
-            parity_block_index: int = 0
-            for index in range(0, len(encoded_segments), self.outer_correction.payload_per_block):
-                payload_block: list[str] = encoded_segments[index:index + self.outer_correction.payload_per_block]
-                parity_block: list[str] = blocked_parity_segments[parity_block_index]
-
-                # Add the parity segments to the end of the payload segments for this block
-                encoded_segments_with_parity.extend(payload_block + parity_block)
-                parity_block_index += 1
+            parity_segments: list[str] = self.outer_correction.add_redundancy(indices, encoded_segments)
 
             # Update the encoded segments to include the parity segments
-            encoded_segments = encoded_segments_with_parity
+            encoded_segments = self.outer_correction.arrange_strands(encoded_segments, parity_segments)
 
         # And frame them
         framed_oligos: list[str] = []
@@ -737,8 +720,6 @@ class OligoFramer:
         # Generate all indicies
         indices: list[str] = self._generate_indices()
 
-        print(len(payload_segments), len(indices))
-
         # Correct the payload segments with outer error correction if we have it
         if self.outer_correction:
             payload_segments = self.outer_correction.perform_correction(indices, payload_segments)
@@ -760,7 +741,6 @@ class OligoFramer:
         )
 
         thing = "".join(decoded_segments) # type: ignore
-        print(thing)
 
         with open(self.in_path, "r", encoding="utf-8") as f:
             original_content = f.read()

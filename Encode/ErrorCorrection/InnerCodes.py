@@ -11,7 +11,7 @@ from abc import abstractmethod
 
 import reedsolo 
 from fastcrc import crc16, crc32
-from typing import Callable, Final, List
+from typing import Callable, Final
 from Encode.Indexer import Indexer
 from Encode.Methods.Encoding import Encoding
 from Encode.Helpers.Errors import InnerCodeError, RankError

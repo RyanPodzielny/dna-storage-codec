@@ -6,7 +6,7 @@ strings. It also includes methods for encoding and decoding files, as well as ca
 Uses both standard DNA mapping and Huffman coding for compression.
 """
 
-from typing import Any, Final, List, override
+from typing import Any, Final, override
 from Encode.Helpers.Errors import PayloadLengthError
 from Encode.Methods.Encoding import Encoding
 from Encode.Methods.HuffmanCoding import Huffman

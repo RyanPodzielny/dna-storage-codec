@@ -6,7 +6,7 @@ and sequencing of the DNA.
 
 
 from abc import abstractmethod
-from typing import ClassVar, Final, List, override
+from typing import ClassVar, Final, override
 from numpy.typing import NDArray
 
 # Can't use reedsolo because it doesn't support GF(3^6) and has a max of 255 symbols. We need to encode each column of
@@ -200,29 +200,525 @@ class OuterCodes():
 
             # Add the first payload_per_block indices from the block to the payload_indices list
             payload_indices += block[:self.payload_per_block]
-        
+
         return payload_indices
-    
+
+
+    def arrange_strands(self, payload_segments: list[str], parity_segments: list[str]) -> list[str]:
+        """
+        Arranges the payload and parity strands in the order they will be framed. Each block of payload strands is
+        followed by its own parity strands, so they all stay in order with the indices.
+
+        Args:
+            payload_segments: The payload segments from the encoder.
+            parity_segments: The parity segments from add_redundancy.
+
+        Returns:
+            The payload and parity segments in the order they will be framed.
+        """
+        # Split on number of parity segments
+        blocked_parity_segments: list[list[str]] = []
+        for index in range(0, len(parity_segments), self.parity_per_block):
+            blocked_parity_segments.append(parity_segments[index:index + self.parity_per_block])
+
+        # Now travel through each block of payload segments and add the parity segments to the end of each block,
+        #   so that they all stay in order
+        arranged_segments: list[str] = []
+        parity_block_index: int = 0
+        for index in range(0, len(payload_segments), self.payload_per_block):
+            payload_block: list[str] = payload_segments[index:index + self.payload_per_block]
+            parity_block: list[str] = blocked_parity_segments[parity_block_index]
+
+            # Add the parity segments to the end of the payload segments for this block
+            arranged_segments.extend(payload_block + parity_block)
+            parity_block_index += 1
+
+        return arranged_segments
+
 
 
 class GoldmanRedundancy(OuterCodes):
     """
-    Creates four quarter-shifted copies of a payload stream.
+    Creates four quarter shifted copies of a payload stream, based on Goldman. All the payload strands are joined into 
+    one trit stream and split into quarters. Each framed strand (window) is four quarters long and starts one quarter 
+    after the previous one, so every quarter shows up in four different windows. Every odd window is reversed to give 
+    each copy a different sequence (adds bit more diversity for recovery). We pad the stream with three quarters of 0
+    trits at each end so the first and last quarters still get all four copies.
+
+    Unlike XOR and RS, the payload strands themselves are never framed - only the windows are. Each window is rotated
+    from its own index base so it never makes a homopolymer with its index. Requires homopolymer-free payloads as we
+    use Goldman's rotation scheme to get the trits.
     """
 
-    LAYERS: int = 4
     def __init__(self):
+        """
+        Initializes the GoldmanRedundancy. Each payload strand ends up as roughly four windows.
+        """
         super().__init__()
+        # Not a true block code, but we can treat each payload strand as a block of one strand, and each window as a 
+        #   block of four strands.
         self.payload_per_block: int = 1
         self.parity_per_block: int = 3
         self.block_strands: int = self.payload_per_block + self.parity_per_block
 
 
-    def add_redundancy(self, segments: list[str], payload_length: int) -> None:
-        pass
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
 
 
-    
+    # How many copies of each quarter we make, and how many quarters are in a window
+    LAYERS: Final[int] = 4
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   STATIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    @staticmethod
+    def align_payload_length(payload_length: int) -> int:
+        """
+        Aligns the payload length to a multiple of four, so each window splits into four whole quarters.
+
+        Args:
+            payload_length: The number of bases available for the payload.
+
+        Returns:
+            The largest multiple of four that fits in the payload length.
+
+        Raises:
+            PayloadLengthError: If the aligned payload length is 0.
+        """
+        aligned_length: int = payload_length - (payload_length % GoldmanRedundancy.LAYERS)
+
+        if aligned_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must fit at least one base per quarter",
+                payload_length=payload_length
+            )
+
+        return aligned_length
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    def _to_digits(self, dna_sequence: str, previous_base: str) -> str:
+        """
+        Converts DNA to the digits we build the stream from. Goldman trits, so it needs the previous base. Overridde
+        in DirectDNAGoldmanRedundancy to use quats instead of trits.
+
+        Args:
+            dna_sequence: The DNA bases to be converted.
+            previous_base: The base before the sequence (last base of its index).
+
+        Returns:
+            The trit string of the DNA bases.
+
+        Raises:
+            EncodingError: If the DNA sequence contains invalid bases or cannot be converted to trits.
+        """
+        return Goldman().dna_to_trit(dna_sequence, previous_base)
+
+
+    def _to_dna(self, digits: str, previous_base: str) -> str:
+        """
+        Converts the digits back to DNA, rotating from the previous base so there are no homopolymers. Overridde in 
+        DirectDNAGoldmanRedundancy to use quats instead of trits.
+ 
+        Args:
+            digits: The trit string to be converted.
+            previous_base: The base before the sequence (last base of its index).
+
+        Returns:
+            The DNA bases of the trit string.
+
+        Raises:
+            ValueError: If the trit string contains invalid trits.
+            EncodingError: If the trit string cannot be converted to DNA.
+        """
+        return Goldman().trit_to_dna(digits, previous_base)
+
+
+    def _reverse_window(self, digits: str) -> str:
+        """
+        Reverses an odd window. Reversing the trits instead of taking the reverse complement of the DNA keeps the window
+        rotating from its own index base. Reversing twice gives back the original, so this also undoes it.
+
+        Args:
+            digits: The trit string of the window.
+
+        Returns:
+            The reversed trit string.
+        """
+        return digits[::-1]
+
+
+    def _choose_quarter(self, quarter_copies: list[str]) -> str | None:
+        """
+        Picks the quarter from all its copies that survived. Takes the most common copy, so a copy with an error that
+        got past the checksum is outvoted by the others. Ties go to the first copy seen.
+
+        Args:
+            quarter_copies: Every surviving copy of the quarter.
+
+        Returns:
+            The most common copy, or None if no copies survived (the quarter is lost).
+        """
+        if not quarter_copies:
+            return None
+
+        # Count each distinct copy
+        counts: dict[str, int] = {}
+        for quarter_copy in quarter_copies:
+            counts[quarter_copy] = counts.get(quarter_copy, 0) + 1
+
+        # Find the most common copy. Only replace on a strictly higher count, so ties stay with the first copy seen
+        best_copy: str = quarter_copies[0]
+        for quarter_copy, count in counts.items():
+            if count > counts[best_copy]:
+                best_copy = quarter_copy
+
+        return best_copy
+
+
+    def _validate_quarter_length(self, payload_length: int) -> None:
+        """
+        Ensures each window splits into LAYERS whole quarters. Otherwise the quarters drift away from the payload strands
+        a little more with every strand, and we would silently rebuild them from the wrong part of the stream.
+
+        Args:
+            payload_length: The length of the payload strands (and windows).
+
+        Raises:
+            PayloadLengthError: If the payload length is not a multiple of LAYERS.
+        """
+        if payload_length % self.LAYERS != 0:
+            raise PayloadLengthError(
+                message=f"Payload length must be a multiple of {self.LAYERS}",
+                payload_length=payload_length
+            )
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PUBLIC HELPER METHODS                                                  #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    def add_redundancy(self, previous_sequences: list[str], payload_sequences: list[str]) -> list[str]:
+        """
+        Creates the overlapping windows from the payload strands. The payload strands are joined into one trit stream,
+        padded, and split into windows of four quarters, each starting one quarter after the previous one.
+
+        Args:
+            previous_sequences: The complete list of index sequences. Payload strand k was encoded from index k, and
+                window i is framed with index i.
+            payload_sequences: The payload sequences to make the windows from.
+
+        Returns:
+            A list of windows, which are the only strands that get framed.
+
+        Raises:
+            ValueError: If previous_sequences or payload_sequences is empty/None.
+            MismatchSegments: If there are not enough previous sequences for the payload strands.
+            PayloadLengthError: If the payload length is 0 or not a multiple of LAYERS.
+            NotEnoughPreviousSegments: If there are not enough previous sequences for all the windows.
+        """
+        # Guard clauses
+        self._validate_segments(previous_sequences, payload_sequences)
+        payload_length: int = self._retrieve_payload_length(payload_sequences)
+        self._validate_quarter_length(payload_length)
+
+        # Every window needs its own reserved index - ensure we have enough of them
+        num_windows: int = self.calculate_total_strands(len(payload_sequences))
+        if len(previous_sequences) < num_windows:
+            raise NotEnoughPreviousSegments(
+                message="Not enough previous sequences for all the windows"
+            )
+
+        # Join all the payload strands into one continuous stream. Each payload strand was encoded from the last base of
+        #   its index, so convert it to trits from that same base
+        stream: str = ""
+        for index, payload_sequence in enumerate(payload_sequences):
+            previous_base: str = previous_sequences[index][-1]
+            stream += self._to_digits(payload_sequence, previous_base)
+
+        # Pad both ends with three quarters of 0 trits, so the first and last quarters are in four windows too. We 
+        #   ensure that our payload length is a multiple of LAYERS, so the quarters are all the same length 
+        quarter_length: int = payload_length // self.LAYERS
+        padding: str = "0" * (quarter_length * (self.LAYERS - 1))
+        stream = padding + stream + padding
+
+        windows: list[str] = []
+        for window_index in range(num_windows):
+            # Each window is four quarters, starting one quarter after the previous window
+            window_start: int = window_index * quarter_length
+            window_digits: str = stream[window_start:window_start + payload_length]
+
+            # Every odd window gets reversed, so the copies of a quarter don't all look the same. It's similar to how
+            #   Goldman did it with reverse complement. It's real job is to make the windows different so if there is 
+            #   is a common error, it doesn't affect all four copies of a quarter. 
+            if window_index % 2 == 1:
+                window_digits = self._reverse_window(window_digits)
+
+            # Rotate from the window's own index base, not the payload's, as the window is what gets framed
+            previous_base: str = previous_sequences[window_index][-1]
+            windows.append(self._to_dna(window_digits, previous_base))
+
+        return windows
+
+
+    @override
+    def perform_correction(self,
+                           previous_sequences: list[str],
+                           encoded_sequences: list[str | None]) -> list[str | None]:
+        """
+        Rebuilds the payload strands from the windows we have left. Every window gives a copy of its four quarters, and
+        each quarter is picked from its copies. A payload strand is lost only if one of its quarters lost all four
+        copies.
+
+        Args:
+            previous_sequences: The complete list of index sequences. Assumed to be sorted. We regenerate any missing
+                one, so no worries about them being none from erasure
+            encoded_sequences: The list of windows we retrieve after decoding. We assume that sequences that are None
+                are the ones marked for erasure. Also assumes that the sequences are in the same order as they were
+                originally encoded (that is sorted by index), as a window's position tells us which quarters it holds.
+
+        Returns:
+            The list of rebuilt payload strands. A payload strand with a lost quarter stays None.
+
+        Raises:
+            ValueError: If previous_sequences or encoded_sequences is empty/None.
+            PayloadLengthError: If the payload length is 0 or not a multiple of LAYERS.
+            MistmatchSegments: If previous_sequences and encoded_sequences are not the same length, or the number of
+                windows doesn't match any number of payload strands.
+        """
+        # Guard clauses
+        self._validate_segments(previous_sequences, encoded_sequences)
+        payload_length: int = self._retrieve_payload_length(encoded_sequences)
+        self._validate_quarter_length(payload_length)
+
+        # Must be same length in this scenario - ensures we have the same number of oligos we encodeded with
+        if len(previous_sequences) != len(encoded_sequences):
+            raise MismatchSegments(
+                message="Previous and encoded sequences must be the same length for performing correction"
+            )
+
+        # Inverse of calculate_total_strands - there are LAYERS windows per payload strand, plus the padding windows
+        num_windows: int = len(encoded_sequences)
+        if num_windows < self.LAYERS or (num_windows - (self.LAYERS - 1)) % self.LAYERS != 0:
+            raise MismatchSegments(
+                message=f"{num_windows} windows doesn't match any number of payload strands"
+            )
+        num_payload_strands: int = (num_windows - (self.LAYERS - 1)) // self.LAYERS
+
+        # Every quarter of the padded stream, with all the copies of it we find. Need to take into account the padding
+        #   quarters at the start and end, which are not part of any payload strand.
+        quarter_length: int = payload_length // self.LAYERS
+        num_quarters: int = num_payload_strands * self.LAYERS + 2 * (self.LAYERS - 1)
+        quarter_copies: list[list[str]] = []
+        for _ in range(num_quarters):
+            quarter_copies.append([])
+
+        # Every window we have left gives a copy of the four quarters it holds - we need to rebuild the quarters from
+        #   their copies, and then rebuild the payload strands from the quarters.
+        for window_index, window in enumerate(encoded_sequences):
+            if window is None:
+                continue
+
+            # Undo add_redundancy: trits from the window's own index base, and unreverse the odd windows
+            previous_base: str = previous_sequences[window_index][-1]
+            window_digits: str = self._to_digits(window, previous_base)
+            if window_index % 2 == 1:
+                window_digits = self._reverse_window(window_digits)
+
+            # Add all the quarters from this window to the list of copies for each quarter
+            for layer in range(self.LAYERS):
+                quarter_start: int = layer * quarter_length
+                quarter_copies[window_index + layer].append(window_digits[quarter_start:quarter_start + quarter_length])
+
+        # Some sequences we may not be able to correct. Returning None means those sequences are forever lost
+        corrected_sequences: list[str | None] = []
+
+        for payload_index in range(num_payload_strands):
+            # Our real quarters start after the padding quarters
+            first_quarter: int = (self.LAYERS - 1) + payload_index * self.LAYERS
+
+            payload_digits: str = ""
+            payload_lost: bool = False
+            for quarter_index in range(first_quarter, first_quarter + self.LAYERS):
+                quarter: str | None = self._choose_quarter(quarter_copies[quarter_index])
+
+                # Lost all four copies of this quarter, so we can't rebuild the payload strand
+                if quarter is None:
+                    payload_lost = True
+                    break
+
+                payload_digits += quarter
+
+            # Segment couldn't be rebuilt, so we return None for it
+            if payload_lost:
+                corrected_sequences.append(None)
+                continue
+
+            # Payload strand k was encoded from the last base of index k, so rotate it back from there
+            previous_base: str = previous_sequences[payload_index][-1]
+            corrected_sequences.append(self._to_dna(payload_digits, previous_base))
+
+        return corrected_sequences
+
+
+    @override
+    def calculate_total_strands(self, payload_strands: int) -> int:
+        """
+        Return the number of windows for the payload strand count.
+
+        Args:
+            payload_strands: The number of payload strands to make windows from.
+
+        Returns:
+            The total number of windows. The stream has LAYERS quarters per payload strand plus the padding quarters at
+            each end, and there is one window starting at every quarter that still has four quarters after it.
+
+        Raises:
+            ValueError: If payload_strands is not positive.
+        """
+        if payload_strands <= 0:
+            raise ValueError("Payload strand count must be positive.")
+
+        return payload_strands * self.LAYERS + (self.LAYERS - 1)
+
+
+    @override
+    def select_payload_indices(self, indices: list[str]) -> list[str]:
+        """
+        Every index is used. Payload strands are never framed, so payload strand k just uses the last base of index k
+        as the starting base to encode from (and decode back to). Window i is framed with index i.
+
+        Args:
+            indices: The complete list of indices.
+
+        Returns:
+            The same list of indices. There are more indices than payload strands, the extra ones are ignored.
+
+        Raises:
+            ValueError: If indices is empty or None.
+        """
+        if not indices:
+            raise ValueError("Indices cannot be empty.")
+
+        return indices
+
+
+    @override
+    def arrange_strands(self, payload_segments: list[str], parity_segments: list[str]) -> list[str]:
+        """
+        Only the windows are framed - each piece of the payload strands is already in four of them.
+
+        Args:
+            payload_segments: The payload segments from the encoder, not framed. Used to keep polymorphism.
+            parity_segments: The windows from add_redundancy.
+
+        Returns:
+            The windows, in the order they will be framed.
+        """
+        return parity_segments
+
+
+
+class DirectDNAGoldmanRedundancy(GoldmanRedundancy):
+    """
+    Goldman's four layer redundancy for encodings that allow homopolymers. We cannot convert "GGG" from Goldman trits
+    and back as the rotation scheme doesnt allow for it. Instead each base is directly a base-4 digit (quat), and odd
+    windows are the true reverse complement like in Goldman's paper. The windows, padding and correction all work the
+    same as GoldmanRedundancy - previous bases are not needed.
+    """
+
+    def __init__(self):
+        """
+        Initializes the DirectDNAGoldmanRedundancy, same windows as GoldmanRedundancy.
+        """
+        super().__init__()
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   PRIVATE HELPER METHODS                                                 #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    def _to_digits(self, dna_sequence: str, previous_base: str) -> str:
+        """
+        Converts DNA bases directly into a quat string, each base being its own base-4 digit.
+
+        Args:
+            dna_sequence: The DNA bases to be converted.
+            previous_base: Used to maintain compatibility with the GoldmanRedundancy class, but not used here.
+
+        Returns:
+            The quat string of the DNA bases.
+        """
+        quats: str = ""
+        for base in dna_sequence:
+            quats += str(OuterCodes.DNA_TO_DIGIT[base])
+
+        return quats
+
+
+    @override
+    def _to_dna(self, digits: str, previous_base: str) -> str:
+        """
+        Converts a quat string directly back into DNA bases.
+
+        Args:
+            digits: The quat string to be converted.
+            previous_base: Used to maintain compatibility with the GoldmanRedundancy class, but not used here.
+
+        Returns:
+            The DNA bases of the quat string.
+        """
+        dna_sequence: str = ""
+        for quat in digits:
+            dna_sequence += OuterCodes.DIGIT_TO_DNA[int(quat)]
+
+        return dna_sequence
+
+
+    @override
+    def _reverse_window(self, digits: str) -> str:
+        """
+        Takes the reverse complement of an odd window, like in Goldman's paper. With A=0, C=1, G=2, T=3 the complement
+        of a base is 3 - its digit. Taking it twice gives back the original, so this also undoes it.
+
+        Args:
+            digits: The quat string of the window.
+
+        Returns:
+            The quat string of the reverse complement.
+        """
+        reverse_complement: str = ""
+        for quat in reversed(digits):
+            reverse_complement += str(3 - int(quat))
+
+        return reverse_complement
+
+
+
 class XOR(OuterCodes):
     """
     Implements a simple XOR-based error correction scheme on the DNA itself. Requires the strands to be homopolymer-free

@@ -6,7 +6,6 @@ the nature of the error and facilitate debugging
 """
 
 
-
 class Error(Exception):
     """
     Base class to encompass all of custom errors
