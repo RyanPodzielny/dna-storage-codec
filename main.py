@@ -4,10 +4,9 @@ Each combination is framed with a FramerConfig, saved with the Serializer, then 
 check that it can be recovered.
 """
 
-import shutil
+
 import sys
 import time
-import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -280,7 +279,6 @@ def test_combination(origin: str, encoded_dir: Path, decoded_dir: Path, combinat
     except Exception as error:
         result.error = f"{type(error).__name__}: {error}"
         print(f"\tFAILED - {result.error}")
-        traceback.print_exc(limit=1, file=sys.stdout)
 
     return result
 
@@ -433,11 +431,6 @@ def main() -> None:
     Returns:
         None
     """
-    # Remove the old encoded and decoded files
-    for old_dir in (ENCODED_DIR, DECODED_DIR):
-        if old_dir.exists():
-            shutil.rmtree(old_dir)
-
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     date_format: str = "%Y-%m-%d_%H:%M:%S"
