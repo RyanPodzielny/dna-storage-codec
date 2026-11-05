@@ -1,7 +1,6 @@
 """Measure DNA bases per original byte for the Canterbury test files."""
 
 import csv
-import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +14,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
 from Encode.Methods.Encoding import Encoding
-from Encode.Methods.HuffmanCoding import BitScanQuaternary, Goldman, Huffman, Pgram, Quaternary, Trenary
+from Encode.Methods.HuffmanCoding import BitScanQuaternary, Goldman, Huffman, Pgram, Quaternary, Ternary
+from Serialize.FileSerializer import Serializer
 
 
 class EncodingRun:
@@ -99,7 +99,7 @@ def create_encoding_runs() -> list[EncodingRun]:
     runs: list[EncodingRun] = [
         EncodingRun("Huffman", None, Huffman),
         EncodingRun("Quaternary", None, Quaternary),
-        EncodingRun("Trenary", None, Trenary),
+        EncodingRun("Ternary", None, Ternary),
         EncodingRun("Goldman", None, Goldman),
         EncodingRun("DNAMap", None, DNAMap),
         EncodingRun("DNAMapHuffman", None, DNAMapHuffman),
@@ -165,15 +165,13 @@ def count_encoded_bases(encoded_payload: str | list[str]) -> int:
 def measure_encoding(
         source_file: Path,
         run: EncodingRun,
-        temporary_directory: Path,
-        huffman_source: Path | None = None) -> Measurement:
+        temporary_directory: Path) -> Measurement:
     """Encode one source file and count its encoded DNA bases.
 
     Args:
         source_file: The original file being measured.
         run: The encoding configuration to execute.
         temporary_directory: Directory for the temporary encoded JSON file.
-        huffman_source: Huffman output used as input by DNAMapHuffman.
 
     Returns:
         A measurement containing the encoded size and rate.
@@ -182,36 +180,17 @@ def measure_encoding(
         FileNotFoundError: If the selected input file does not exist.
         ValueError: If the encoder writes an invalid payload.
     """
-    # Create the encoder and determine the input file
     encoder: Encoding = run.create_encoder()
-    input_file: Path | None 
-    # DNAMapHuffman uses Huffman output as input, while all other encoders use the original file
-    if run.name == "DNAMapHuffman":
-        input_file = huffman_source
-    else:
-        input_file = source_file
-    if input_file is None:
-        raise FileNotFoundError("Input file not found.")
 
     # Each run gets a separate file, but the temporary directory is removed automatically when all files have been measured.
     output_file: Path = temporary_directory / f"{run.name}_{run.parameter}.json"
-    encoder.encode_from_file(
-        str(input_file),
+    payload: str
+    _, payload = Serializer.encode_to_file(
+        encoder,
+        str(source_file),
         str(output_file),
         as_binary=run.uses_binary_input,
     )
-
-    # Open the JSON file and extract the encoded payload. The payload is either a string or a list of strings, depending
-    #  on the encoder
-    with output_file.open("r", encoding="utf-8") as json_file:
-        encoded_json: dict[str, object] = json.load(json_file)
-
-    # The encoded payload is stored under the key defined by the encoder class.
-    payload: object = encoded_json[Encoding.ENCODED_DATA]
-    if not isinstance(payload, (str, list)):
-        raise ValueError(f"Unexpected encoded payload in {output_file}.")
-    if isinstance(payload, list) and not all(isinstance(item, str) for item in payload):
-        raise ValueError(f"Unexpected encoded payload segments in {output_file}.")
 
     # Count the number of DNA bases represented by the payload and return a measurement
     return Measurement(
@@ -276,10 +255,9 @@ def create_summaries(measurements: list[Measurement]) -> dict[tuple[str, int | N
     return configurations
 
 
-def write_measurements(
-        measurements: list[Measurement],
-        summaries: dict[tuple[str, int | None], Summary],
-        output_path: Path) -> None:
+def write_measurements(measurements: list[Measurement],
+                       summaries: dict[tuple[str, int | None], Summary],
+                       output_path: Path) -> None:
     """Write detailed measurements and repeated summary values as CSV.
 
     Args:
@@ -322,9 +300,8 @@ def write_measurements(
             )
 
 
-def write_terminal_table(
-        summaries: list[Summary],
-        output_path: Path | None = None) -> None:
+def write_terminal_table(summaries: list[Summary],
+                         output_path: Path | None = None) -> None:
     """Write a readable summary table to the terminal.
 
     Args:
@@ -391,24 +368,17 @@ def main() -> None:
     with TemporaryDirectory() as temporary_directory_name:
         temporary_directory: Path = Path(temporary_directory_name)
 
-        # For each source file, run every encoder and measure the bases-per-byte rate. Huffman output is used as input 
-        #   for DNAMapHuffman.
+        # For each source file, run every encoder and measure the bases-per-byte rate
         for source_file in canterbury_files(source_directory):
-            huffman_source: Path | None = None
-
             # Perform each encoding with its mesaurement
             for run in encoding_runs:
                 measurement: Measurement = measure_encoding(
                     source_file,
                     run,
                     temporary_directory,
-                    huffman_source,
                 )
 
                 measurements.append(measurement)
-                # If the encoder was Huffman, save its output for DNAMapHuffman.
-                if run.name == "Huffman":
-                    huffman_source = temporary_directory / "Huffman_None.json"
 
     # Create summaries for each encoder configuration and save the CSV output.
     summaries: dict[tuple[str, int | None], Summary] = create_summaries(measurements)

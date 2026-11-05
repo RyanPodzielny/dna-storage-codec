@@ -8,10 +8,8 @@ define specific encoding strategies.
 """
 
 
-import json
 from abc import abstractmethod
 from typing import Final, Any
-from Encode.Helpers.Errors import JSONError
 
 
 class Encoding:
@@ -37,6 +35,24 @@ class Encoding:
 
     #--------------------------------------------------------------------------#
     #                                                                          #
+    #   GETTER METHODS                                                         #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this encoder when loading a saved framer. Encoders
+        without constructor arguments don't need to override this.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {}
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
     #   CLASS CONSTANTS                                                        #
     #                                                                          #
     #--------------------------------------------------------------------------#
@@ -54,13 +70,6 @@ class Encoding:
 
     BINARY_SYMBOLS: Final[set[str]] = {'0', '1'}
     TRINARY_SYMBOLS: Final[set[str]] = {'0', '1', '2'}
-
-    # JSON keys for saving and reading encoded data
-    ENCODED_DATA: Final[str] = "encoded_data"
-    HUFFMAN_CODES: Final[str] = "huffman_codes"
-    HAS_SINGLE_PADDING: Final[str] = "has_single_padding"
-    ENCODED_TYPE: Final[str] = "encoded_type"
-    INDEXER_TYPE: Final[str] = "indexer_type"
 
 
     #--------------------------------------------------------------------------#
@@ -106,31 +115,20 @@ class Encoding:
 
 
     @staticmethod
-    def read_json_table(json_inpath: str) -> dict[str, Any]:
+    def as_sequences(encoded_data: str | list[str]) -> list[str]:
         """
-        Reads the encoded data and padding information from a JSON file.
+        Gets encoded data as a list of sequences, so a whole file encoding (one string) and framed or segmented data
+        (a list of strings) can be measured the same way.
 
         Args:
-            json_inpath: The path to the input JSON file containing the encoded data and padding information.
+            encoded_data: The encoded data as one string or a list of strings.
 
         Returns:
-            A dictionary containing the encoded data, padding information, and Huffman codes (if applicable).
-
-        Raises:
-            FileNotFoundError: If the input JSON file does not exist.
-            JSONError: If the JSON file is empty or does not contain the expected keys.
+            The encoded data as a list of strings.
         """
-        # Read the encoded data and padding information from the JSON file
-        with open(json_inpath, 'r', encoding='utf-8') as json_file:
-            json_data = json.load(json_file)
-
-            if json_data.keys() != {Encoding.ENCODED_DATA, Encoding.HUFFMAN_CODES, Encoding.HAS_SINGLE_PADDING, 
-                                    Encoding.ENCODED_TYPE, Encoding.INDEXER_TYPE}:
-                raise JSONError(
-                    message=f"JSON file does not contain the expected keys.",
-                    json_path=json_inpath
-                )
-            return json_data
+        if isinstance(encoded_data, str):
+            return [encoded_data]
+        return encoded_data
 
 
     #--------------------------------------------------------------------------#
@@ -163,11 +161,6 @@ class Encoding:
 
 
     @abstractmethod
-    def encode_from_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
-        raise NotImplementedError()
-
-
-    @abstractmethod
     def decode_segments(self, encoded_data: list[str | None], *args, **kwargs) -> list[str | None]:
         raise NotImplementedError()
     
@@ -178,65 +171,15 @@ class Encoding:
 
 
     @abstractmethod
-    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
-        raise NotImplementedError()
-
-
-    @abstractmethod
     def estimate_bases_per_byte(self) -> float:
         raise NotImplementedError()
 
 
     @abstractmethod
-    def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
+    def calculate_overall_size(self, encoded_data: str | list[str], huffman_codes: dict[str, str]) -> tuple[int, int]:
         raise NotImplementedError()
 
         
-    def save_json_table(self, 
-                        json_path: str, 
-                        encoded_data: str | list[str], 
-                        huffman_codes: dict[str, str] = {},
-                        has_padding: bool = False,
-                        indexer_type: str = "") -> None:
-        """
-        Saves the encoded data and padding information to a file. Baseline for all children classes. Must have some 
-        encoded data to save, otherwise raises a ValueError. All other paramters are optional, unless the encoding is 
-        not a DNAMap, in which case the huffman_codes must be provided.
-
-        Args:
-            json_path: The path to the output file where the encoded data will be written.
-            encoded_data: The encoded DNA sequence as a string or a list of strings (for segmented data).
-            huffman_codes: A dictionary mapping each character to its corresponding Huffman code. Default is
-            has_padding: A boolean indicating whether padding was added during encoding.
-            indexer_type: A string indicating the type of indexer used for encoding.
-
-        Returns:
-            None
-
-        Raises:
-            ValueError: If the encoded data is None.
-            FileNotFoundError: If the output file cannot be created or opened.
-        """
-        if encoded_data is None:
-            raise ValueError("Encoded data cannot be None")
-
-        class_name: str = self.__class__.__name__
-        if class_name != "DNAMap":
-            if not huffman_codes:
-                raise ValueError("Huffman codes cannot be empty for non-DNAMap encodings")
-
-        # Write the DNA string to the output file
-        with open(json_path, 'w', encoding='utf-8') as encoded_file:
-            save: dict[str, Any] = {
-                Encoding.ENCODED_DATA: encoded_data,
-                Encoding.HUFFMAN_CODES: huffman_codes,
-                Encoding.HAS_SINGLE_PADDING: has_padding,
-                Encoding.INDEXER_TYPE: indexer_type,
-                Encoding.ENCODED_TYPE: class_name
-            }
-            json.dump(save, encoded_file, indent=4)
-
-
     def count_runs(self, data: str, k: int = 4) -> tuple[int, list[tuple[int, int]]]:
         """
         Counts the number of runs of DNA bases in a given string that are at least of length k.
@@ -290,52 +233,57 @@ class Encoding:
         return count, indices
 
 
-    def print_info(self, json_path: str, original_size: int, k: int = 3) -> None:
+    def print_info(self,
+                   encoded_data: str | list[str],
+                   huffman_codes: dict[str, str],
+                   original_size: int,
+                   k: int = 3) -> None:
         """
-        Prints the size information of the encoded data.
+        Prints the size information of the encoded data. Works on a whole file encoding (one string) or on a list of
+        sequences (e.g. framed oligos), where runs are counted within each sequence so none span two sequences.
 
         Args:
-            encoded_data: The encoded data as a string.
+            encoded_data: The encoded data as one string or a list of strings.
+            huffman_codes: The codes the encoder used (the DNA map for DNAMap).
             original_size: The size of the original data in bits.
             k: The minimum length of a DNA run to be counted.
 
         Returns:
             None
-
-        Raises:
-            FileNotFoundError: If the input JSON file does not exist.
-            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
-        json_data: dict[str, Any] = Encoding.read_json_table(json_path)
-        encoded_data: str = json_data[Encoding.ENCODED_DATA]
-        huffman_codes: dict[str, str] = json_data[Encoding.HUFFMAN_CODES]
-        has_padding: bool = json_data[Encoding.HAS_SINGLE_PADDING]
-        encoded_type: str = json_data[Encoding.ENCODED_TYPE]
-        indexer_type: str = json_data[Encoding.INDEXER_TYPE]
+        sequences: list[str] = Encoding.as_sequences(encoded_data)
 
         # Calculate the size of the encoded data and the table
         encoded_size: int
         table_size: int
-        encoded_size, table_size = self.calculate_overall_size(json_path)
+        encoded_size, table_size = self.calculate_overall_size(sequences, huffman_codes)
 
-        print(f"{encoded_type} Encoding")
+        print(f"{self.__class__.__name__} Encoding")
         print(f"\tEncoded data size: {encoded_size} bits")
         print(f"\tTable size: {table_size} bits")
         print(f"\tTotal size: {encoded_size + table_size} bits")
-        print(f"\tIndexer type: {indexer_type}")
 
-        if encoded_type in {"DNAMap", "DNAMapHuffman"}:
-            print(f"\tPadding added: {has_padding}")
-
-        # Standard huffman isn't directly in DNA
-        if encoded_type == "Huffman":
+        # Standard huffman isn't directly in DNA, so there are no bases to measure
+        if not all(set(sequence) <= self.DNA_BASES for sequence in sequences):
             return
 
-        bases: str = encoded_data
-        runs: int = self.count_runs(bases, k)[0]
-        GC_content: float = (bases.count('G') + bases.count('C')) / len(bases) * 100
-        
+        num_bases: int = sum(len(sequence) for sequence in sequences)
+        if num_bases == 0:
+            return
+
+        # Count the runs and G/C bases one sequence at a time, so a run never spans two sequences
+        runs: int = 0
+        gc_bases: int = 0
+        for sequence in sequences:
+            # Count runs of length >= k in the sequence
+            runs += self.count_runs(sequence, k)[0]
+            # Count G/C bases for GC content calculation
+            gc_bases += sequence.count('G') + sequence.count('C')
+
+        # Calculate GC content as a percentage of total bases
+        GC_content: float = gc_bases / num_bases * 100
+
         print(f"\tNumber of runs of length >= {k}: {runs}")
-        print(f"\tNumber of bases in encoded data: {len(bases)}")
+        print(f"\tNumber of bases in encoded data: {num_bases}")
         print(f"\tGC content: {GC_content:.2f}%")
-        print(f"\tEffective Bits per Nucleotide: {original_size / len(bases):.2f} bits/base")
+        print(f"\tEffective Bits per Nucleotide: {original_size / num_bases:.2f} bits/base")

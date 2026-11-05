@@ -10,10 +10,10 @@ be stored differently in a real application.
 
 
 import math
-from typing import Final, override
-from Encode.Helpers.Errors import EncodingError, IndexingError, PayloadLengthError
+from typing import Any, Final, override
+from Helpers.Errors import EncodingError, IndexingError, PayloadLengthError
 from Encode.Methods.Encoding import Encoding
-from Encode.Helpers.PriorityQueue import PriorityQueue
+from Helpers.PriorityQueue import PriorityQueue
 
 
 class Huffman(Encoding):
@@ -59,33 +59,6 @@ class Huffman(Encoding):
 
     # Character used to pad oligos, needs to be added to trees (preferred over null bytes as nothing is encoded)
     CHUNKING_PADDING_CHAR: Final[str] = '' 
-
-
-    #--------------------------------------------------------------------------#
-    #                                                                          #
-    #   STATIC HELPER METHODS                                                  #
-    #                                                                          #
-    #--------------------------------------------------------------------------#
-
-
-    @override
-    @staticmethod
-    def read_json_table(json_path: str) -> tuple[str, dict[str, str]]:
-        """
-        Formats the raw Huffman table string into a dictionary mapping codes to characters.
-
-        Args:
-            json_path: The path to the JSON file containing the Huffman table.
-
-        Returns:
-            A dictionary mapping Huffman codes to their corresponding characters.
-
-        Raises:
-            FileNotFoundError: If the input file does not exist.
-            JSONError: If the JSON file is empty or does not contain the expected keys.
-        """
-        json_data = Encoding.read_json_table(json_path)
-        return json_data[Encoding.ENCODED_DATA], json_data[Encoding.HUFFMAN_CODES]
 
 
     #--------------------------------------------------------------------------#
@@ -407,41 +380,6 @@ class Huffman(Encoding):
 
 
     @override
-    def encode_from_file(self, in_path: str, json_outpath: str, as_binary: bool = False) -> str:
-        """
-        Encodes the data from the input file and writes the encoded data and Huffman table to the output file.
-
-        Args:
-            in_path: Path to the input file containing the data to be encoded.
-            json_outpath: Path to the JSON file where the encoded data and Huffman table will be written.
-            as_binary: A boolean indicating whether to convert the original file to binary before encoding.
-
-        Returns:
-            The encoded data as a string.
-
-        Raises:
-            FileNotFoundError: If the input file does not exist or if output cannot be created/opened for writing.
-            ValueError: If we cannot generate valid Huffman codes. Or if saved encoded data is None or empty.
-        """
-        # Open the input file and read the data
-        with open(in_path, 'r', encoding='utf-8') as f:
-            data: str = f.read()
-            if as_binary:
-                data = Encoding.ascii_to_binary(data)
-
-        encoded_data: str
-        huffman_codes: dict[str, str]
-
-        # Get the Huffman codes and encoded data
-        huffman_codes, encoded_data = self.encode(data)
-
-        # Save the encoded data and Huffman table to the output file
-        self.save_json_table(json_outpath, encoded_data, huffman_codes)
-
-        return encoded_data
-
-
-    @override
     def decode_segments(self, 
                         encoded_data: list[str | None], 
                         huffman_codes: dict[str, str], 
@@ -501,42 +439,6 @@ class Huffman(Encoding):
         return decoded_data
 
 
-    @override
-    def decode_to_file(self, in_path: str, out_path: str, as_binary: bool = False) -> str:
-        """
-        Decodes the encoded data from a file and writes the result to another file.
-
-        Args:
-            in_path: The path to the input json file containing the encoded data and Huffman table.
-            out_path: The path to the output file where the decoded data will be written.
-
-        Returns:
-            The decoded data as a string.
-
-        Raises:
-            FileNotFoundError: If the input file does not exist or if the output file cannot be created.
-            JSONError: If the JSON file is empty or does not contain the expected keys.
-        """
-        # Enocoded data is first
-        encoded_data: str 
-        huffman_codes: dict[str, str]
-
-        # Parse encoded data and table from the input file
-        encoded_data, huffman_codes = self.read_json_table(in_path)
-        
-        # Now decode the data using the table
-        decoded_data: str = self.decode(encoded_data, huffman_codes)
-
-        # See if we need to convert to binary
-        if as_binary:
-            decoded_data = Encoding.binary_to_ascii(decoded_data)
-        
-        with open(out_path, 'w', encoding='utf-8') as f:
-            f.write(decoded_data)
-
-        return decoded_data
-
-
     def estimate_bases_per_byte(self) -> float:
         """
         Estimates the number of DNA bases required to encode one byte of data using Huffman coding. Calculated based on
@@ -549,36 +451,22 @@ class Huffman(Encoding):
     
 
     @override
-    def calculate_overall_size(self, json_path: str) -> tuple[int, int]:
+    def calculate_overall_size(self, encoded_data: str | list[str], huffman_codes: dict[str, str]) -> tuple[int, int]:
         """
         Calculates the size of the encoded data and table in bits.
 
         Args:
-            json_path: The path to the input JSON file containing the encoded data and Huffman table.
+            encoded_data: The encoded data as one string or a list of strings.
+            huffman_codes: A dictionary mapping each character to its corresponding Huffman code.
 
         Returns:
             A tuple of the size of the encoded data in bits and size of the table in bits.
-
-        Raises:
-            FileNotFoundError: If the input file does not exist.
-            JSONError: If the JSON file is empty or does not contain the expected keys.
         """
-        encoded_data: str
-        huffman_codes: dict[str, str]
-        
-        # Read the encoded data and Huffman table from the JSON file
-        encoded_data, huffman_codes = self.read_json_table(json_path)
+        # Each symbol in the encoded data is VALUE_MULTIPLIER bits
+        num_symbols: int = sum(len(sequence) for sequence in Encoding.as_sequences(encoded_data))
+        encoded_bits: int = num_symbols * self.VALUE_MULTIPLIER
 
-        # Calculate the size of the encoded data in bits
-        encoded_bits: int = len(encoded_data) * self.VALUE_MULTIPLIER
-
-        # Calculate the size of the table in bits
-        table_bits: int = 0
-        for code, char in huffman_codes.items():
-            # Each character is stored as 8 bits (1 byte) and the code is stored as its length in bits
-            table_bits += 8 + (len(code) * self.VALUE_MULTIPLIER)
-
-        return encoded_bits, table_bits
+        return encoded_bits, self.calculate_huffman_table_size(huffman_codes)
 
 
     def calculate_huffman_table_size(self, huffman_codes: dict[str, str]) -> int:
@@ -779,6 +667,24 @@ class BitScanQuaternary(Quaternary):
 
     #--------------------------------------------------------------------------#
     #                                                                          #
+    #   GETTER METHODS                                                         #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this instance when loading a saved framer.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {"k": self.K}
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
     #   CLASS CONSTANTS                                                        #
     #                                                                          #
     #--------------------------------------------------------------------------#
@@ -968,8 +874,12 @@ class BitScanQuaternary(Quaternary):
         return (8 / self.K) * math.ceil(self.K / 2)
 
 
-    def print_info(self, encoded_data: str, original_size: int, k: int = 3) -> None:
-        super().print_info(encoded_data, original_size, k)
+    def print_info(self, 
+                   encoded_data: str | list[str], 
+                   huffman_codes: dict[str, str], 
+                   original_size: int, 
+                   k: int = 3) -> None:
+        super().print_info(encoded_data, huffman_codes, original_size, k)
         print(f"\tK Used: {self.K}")
 
 
@@ -1009,6 +919,24 @@ class Pgram(Huffman):
 
         # Will use function, placeholder
         self.ESTIMATED_BASES_PER_BYTE: float = max(Pgram.PGRAM_BASES_PER_BYTE.values())
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   GETTER METHODS                                                         #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    @override
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this instance when loading a saved framer.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {"m": self.M}
 
 
     #--------------------------------------------------------------------------#
@@ -1495,8 +1423,12 @@ class Pgram(Huffman):
         return Pgram.PGRAM_BASES_PER_BYTE[min(self.M, max(Pgram.PGRAM_BASES_PER_BYTE))]
 
 
-    def print_info(self, encoded_data: str, original_size: int, k: int = 2) -> None:
-        super().print_info(encoded_data, original_size, k)
+    def print_info(self, 
+                   encoded_data: str | list[str], 
+                   huffman_codes: dict[str, str], 
+                   original_size: int, 
+                   k: int = 2) -> None:
+        super().print_info(encoded_data, huffman_codes, original_size, k)
         print(f"\tM Used: {self.M}")
 
 
@@ -1824,5 +1756,9 @@ class Goldman(Huffman):
 
 
     @override
-    def print_info(self, encoded_data: str, original_size: int, k: int = 2) -> None:
-        super().print_info(encoded_data, original_size, k)
+    def print_info(self, 
+                   encoded_data: str | list[str], 
+                   huffman_codes: dict[str, str], 
+                   original_size: int, 
+                   k: int = 2) -> None:
+        super().print_info(encoded_data, huffman_codes, original_size, k)

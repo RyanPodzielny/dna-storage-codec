@@ -11,10 +11,10 @@ from abc import abstractmethod
 
 import reedsolo 
 from fastcrc import crc16, crc32
-from typing import Callable, Final
+from typing import Any, Callable, Final, override
 from Encode.Indexer import Indexer
 from Encode.Methods.Encoding import Encoding
-from Encode.Helpers.Errors import InnerCodeError, RankError
+from Helpers.Errors import InnerCodeError, RankError
 
 
 class InnerCodes():
@@ -25,6 +25,16 @@ class InnerCodes():
     """
     def __init__(self, indexer: type[Indexer], *args, **kwargs):
         self.indexer = indexer
+
+
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this inner code when loading a saved framer.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {}
 
 
     @abstractmethod
@@ -38,6 +48,7 @@ class InnerCodes():
                         before_sequence: str, after_sequence: str,
                         *args, **kwargs) -> tuple[str, str]:
         raise NotImplementedError()
+
 
 
 class CheckSum(InnerCodes):
@@ -73,6 +84,21 @@ class CheckSum(InnerCodes):
             width=indexer.determine_optimal_width(1 << self.width),
             max_run_length=max_run_length
         )
+
+
+    @override
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this instance when loading a saved framer.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {
+            "indexer": type(self.indexer),
+            "inner_code": self.inner_code,
+            "max_run_length": self.indexer.max_run_length
+        }
 
 
     #--------------------------------------------------------------------------#
@@ -277,6 +303,21 @@ class RSInner(InnerCodes):
             width=indexer.determine_optimal_width(1 << 8),
             max_run_length=max_run_length
         )
+
+
+    @override
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this instance when loading a saved framer.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {
+            "indexer": type(self.indexer),
+            "parity_bytes": self.parity_bytes,
+            "max_run_length": self.indexer.max_run_length
+        }
 
 
     #--------------------------------------------------------------------------#

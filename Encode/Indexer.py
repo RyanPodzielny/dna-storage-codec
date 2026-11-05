@@ -8,7 +8,7 @@ from abc import abstractmethod
 from functools import lru_cache
 from typing import Any, Final, override
 
-from Encode.Helpers.Errors import EncodingError, MaxRunLengthError, RankError, UnrankError
+from Helpers.Errors import EncodingError, MaxRunLengthError, RankError, UnrankError
 from Encode.Methods.HuffmanCoding import Goldman, Huffman
 from Encode.Methods.Encoding import Encoding
 
@@ -32,6 +32,17 @@ class Indexer:
 
         # Default value, can be overridden in subclasses
         self.max_run_length: int = 1  
+
+
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this indexer when loading a saved framer. The width
+        is not included, it is saved with the rest of the layout.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {}
 
 
     @staticmethod
@@ -444,6 +455,17 @@ class EnumerativeIndexer(Indexer):
         self.max_run_length: int = max_run_length
 
 
+    @override
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this instance when loading a saved framer.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {"max_run_length": self.max_run_length}
+
+
     #--------------------------------------------------------------------------#
     #                                                                          #
     #   CLASS CONSTANTS                                                        #
@@ -835,13 +857,13 @@ class EnumerativeIndexer(Indexer):
         before_run: int = self.max_run_length
         after_run: int = self.max_run_length
 
-        # Calculate the total number of valid indices for the current width, assumes before and after are of 
-        #   length 1, which is the worst case scenario for homopolymer runs
-        total_valid_indices: int = self._num_valid_placements(
-            self.width,                    
-            True,
-            before_run,                    
-            after_run                    
+        # Calculate the total number of valid indices for the current width, assumes before and after are of
+        #   length 1, which is the worst case scenario for homopolymer runs. Whether the bases on either side being the
+        #   same or different is worse flips with the width (e.g. max run 1, width 5: 183 same vs 182 different), so
+        #   take the smaller of the two
+        total_valid_indices: int = min(
+            self._num_valid_placements(self.width, True, before_run, after_run),
+            self._num_valid_placements(self.width, False, before_run, after_run)
         )
 
         return total_valid_indices

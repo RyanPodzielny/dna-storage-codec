@@ -6,7 +6,7 @@ and sequencing of the DNA.
 
 
 from abc import abstractmethod
-from typing import ClassVar, Final, override
+from typing import Any, ClassVar, Final, override
 from numpy.typing import NDArray
 
 # Can't use reedsolo because it doesn't support GF(3^6) and has a max of 255 symbols. We need to encode each column of
@@ -16,7 +16,7 @@ import galois
 import numpy as np
 import math
 
-from Encode.Helpers.Errors import EncodingError, MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, \
+from Helpers.Errors import EncodingError, MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, \
     PayloadLengthError
 from Encode.Indexer import GoldmanIndexer
 from Encode.Methods.Encoding import Encoding
@@ -33,6 +33,17 @@ class OuterCodes():
         # Full block length (payload + parity) - each strand in the block gets its own index
         self.block_strands: int = 0
         self.num_blocks: int = 0
+
+
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this outer code when loading a saved framer. The
+        number of blocks is not included, it is saved with the rest of the layout.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {}
 
 
     #--------------------------------------------------------------------------#
@@ -364,6 +375,23 @@ class GoldmanRedundancy(OuterCodes):
         return digits[::-1]
 
 
+    def _all_erased(self, encoded_sequences: list[str | None]) -> bool:
+        """
+        Checks if every window was marked for erasure.
+
+        Args:
+            encoded_sequences: The list of windows we retrieve after decoding.
+
+        Returns:
+            True if every window is None, False otherwise.
+        """
+        for sequence in encoded_sequences:
+            if sequence is not None:
+                return False
+
+        return True
+
+
     def _choose_quarter(self, quarter_copies: list[str]) -> str | None:
         """
         Picks the quarter from all its copies that survived. Takes the most common copy, so a copy with an error that
@@ -508,8 +536,6 @@ class GoldmanRedundancy(OuterCodes):
         """
         # Guard clauses
         self._validate_segments(previous_sequences, encoded_sequences)
-        payload_length: int = self._retrieve_payload_length(encoded_sequences)
-        self._validate_quarter_length(payload_length)
 
         # Must be same length in this scenario - ensures we have the same number of oligos we encodeded with
         if len(previous_sequences) != len(encoded_sequences):
@@ -524,6 +550,13 @@ class GoldmanRedundancy(OuterCodes):
                 message=f"{num_windows} windows doesn't match any number of payload strands"
             )
         num_payload_strands: int = (num_windows - (self.LAYERS - 1)) // self.LAYERS
+
+        # Every window was erased, so there is nothing to rebuild from (and no window to read the payload length from)
+        if self._all_erased(encoded_sequences):
+            return [None] * num_payload_strands
+
+        payload_length: int = self._retrieve_payload_length(encoded_sequences)
+        self._validate_quarter_length(payload_length)
 
         # Every quarter of the padded stream, with all the copies of it we find. Need to take into account the padding
         #   quarters at the start and end, which are not part of any payload strand.
@@ -1168,7 +1201,7 @@ class RSOuter(OuterCodes):
     """
 
 
-    def __init__(self, redundancy_percentage: float = 0.1):
+    def __init__(self, redundancy: float = 0.1):
         """
         Initializes the Reed-Solomon outer code.
 
@@ -1179,20 +1212,31 @@ class RSOuter(OuterCodes):
         Raises:
             ValueError: If redundancy_percentage is not greater than 0 and at most 1.
         """
-        if not (0 < redundancy_percentage <= 1):
+        if not (0 < redundancy <= 1):
             raise ValueError("Redundancy percentage must be greater than 0 and at most 1.")
 
         super().__init__()
 
-        self.redundancy_percentage: float = redundancy_percentage
+        self.redundancy: float = redundancy
 
         # Redundancy is measured relative to data strands, not the complete codeword.
-        self.payload_per_block: int = int(self.MAX_BLOCK_STRANDS / (1 + redundancy_percentage))
+        self.payload_per_block: int = int(self.MAX_BLOCK_STRANDS / (1 + redundancy))
         self.parity_per_block: int = self.MAX_BLOCK_STRANDS - self.payload_per_block
         self.block_strands: int = self.MAX_BLOCK_STRANDS
         self.rs: galois.ReedSolomon = self._get_rs(self.payload_per_block, self.parity_per_block)
 
         self.num_blocks: int = 0
+
+
+    @override
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this instance when loading a saved framer.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {"redundancy": self.redundancy}
 
 
     #--------------------------------------------------------------------------#
@@ -1315,7 +1359,7 @@ class RSOuter(OuterCodes):
             return self.parity_per_block
 
         # Otherwise calculate parity based on the redundancy and round up to ensure we have enough parity strands
-        return math.ceil(payload_count * self.redundancy_percentage)
+        return math.ceil(payload_count * self.redundancy)
 
 
     def _payload_for_block(self, block_strands: int) -> int:
@@ -1784,14 +1828,14 @@ class DirectDNARSOuter(RSOuter):
     """
 
 
-    def __init__(self, redundancy_percentage: float = 0.1):
+    def __init__(self, redundancy: float = 0.1):
         """
         Initializes the DirectDNARSOuter with a specified redundancy percentage.
 
         Args:
             redundancy_percentage: The percentage of redundancy to be used in the outer code.
         """
-        super().__init__(redundancy_percentage=redundancy_percentage)
+        super().__init__(redundancy=redundancy)
 
 
     #--------------------------------------------------------------------------#
