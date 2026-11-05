@@ -16,7 +16,7 @@ from typing import Any, Final
 from Helpers.Errors import JSONError, NotInRegistryError
 from Encode.OligoFramer import FramerConfig, OligoDeframer, OligoFramer
 from Encode.Methods.Encoding import Encoding
-from Encode.Methods.HuffmanCoding import BitScanQuaternary, Goldman, Huffman, Pgram, Quaternary, Ternary
+from Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryTree, Goldman, Huffman, Pgram, Quaternary, Ternary
 from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
 from Encode.Indexer import DNAMapIndexer, EnumerativeIndexer, GoldmanIndexer
 from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
@@ -44,7 +44,7 @@ class Registry:
     #   name, so if a class is renamed, map its old name to it here too so older files still load
     COMPONENTS: Final[dict[str, type]] = {component.__name__: component for component in (
         # Encoders
-        Huffman, Ternary, Quaternary, BitScanQuaternary, Pgram, Goldman, DNAMap, DNAMapHuffman,
+        Huffman, Ternary, Quaternary, BitScanQuaternary, Pgram, ComplementaryTree, Goldman, DNAMap, DNAMapHuffman,
 
         # Indexers
         DNAMapIndexer, GoldmanIndexer, EnumerativeIndexer,
@@ -89,7 +89,7 @@ class Registry:
         # Check if the component class is registered
         if component_type not in Registry.NAMES:
             raise NotInRegistryError(
-                message=f"{component_type.__name__} is not registered, add it to Registry.COMPONENTS to save it.",
+                message=f"{component_type.__name__} is not registered, add it to Registry.COMPONENTS to save it",
                 component_name=component_type.__name__
             )
 
@@ -113,7 +113,7 @@ class Registry:
         # Check if the name is registered
         if name not in Registry.COMPONENTS:
             raise NotInRegistryError(
-                message=f"{name} is not registered, add it to Registry.COMPONENTS to load it.",
+                message=f"{name} is not registered, add it to Registry.COMPONENTS to load it",
                 component_name=name
             )
 
@@ -225,13 +225,12 @@ class Serializer:
     FILLER_LENGTH: Final[str] = "filler_length"
     #--#
 
-    #--#
+
     # Everything relating to whole file encodings (encoded as one sequence, without framing). The encoder and Huffman
     #   codes use the same keys as above
     ENCODED_DATA: Final[str] = "encoded_data"
     HAS_PADDING: Final[str] = "has_padding"
     AS_BINARY: Final[str] = "as_binary"
-    #--#
 
 
     #--------------------------------------------------------------------------#

@@ -14,12 +14,13 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
 from Encode.Methods.Encoding import Encoding
-from Encode.Methods.HuffmanCoding import BitScanQuaternary, Goldman, Huffman, Pgram, Quaternary, Ternary
+from Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryTree, Goldman, Huffman, Pgram, Quaternary, Ternary
 from Serialize.FileSerializer import Serializer
 
 
 class EncodingRun:
-    """Describe one encoder and its optional parameter.
+    """
+    Describe one encoder and its optional parameter.
 
     Args:
         name: The name written to the output for this encoder.
@@ -27,6 +28,8 @@ class EncodingRun:
         create_encoder: A factory that creates a fresh encoder instance.
         uses_binary_input: Whether the encoder expects the source as binary text.
     """
+
+
     def __init__(self, 
                  name: str, 
                  parameter: int | None, 
@@ -38,8 +41,10 @@ class EncodingRun:
         self.uses_binary_input: bool = uses_binary_input
 
 
+
 class Measurement:
-    """Store one file's encoded size and its bases-per-byte rate.
+    """
+    Store one file's encoded size and its bases-per-byte rate.
 
     Args:
         file_name: The name of the original input file.
@@ -48,6 +53,8 @@ class Measurement:
         original_bytes: The size of the original file in bytes.
         encoded_bases: The number of DNA bases in the encoded payload.
     """
+
+
     def __init__(self, file_name: str, method: str, parameter: int | None, original_bytes: int, encoded_bases: int):
         self.file_name: str = file_name
         self.method: str = method
@@ -57,7 +64,8 @@ class Measurement:
 
 
     def bases_per_byte(self) -> float:
-        """Return the encoded bases divided by the original byte count.
+        """
+        Return the encoded bases divided by the original byte count.
 
         Returns:
             The number of encoded DNA bases per original byte.
@@ -68,8 +76,10 @@ class Measurement:
         return self.encoded_bases / self.original_bytes
 
 
+
 class Summary:
-    """Store cross-file statistics for one encoding configuration.
+    """
+    Store cross-file statistics for one encoding configuration.
 
     Args:
         method: The encoding method being summarized.
@@ -78,6 +88,7 @@ class Summary:
         minimum: The smallest bases-per-byte rate.
         maximum: The largest bases-per-byte rate.
     """
+
 
     def __init__(self, method: str, parameter: int | None, average: float, minimum: float, maximum: float):
         self.method: str = method
@@ -89,7 +100,8 @@ class Summary:
 
 
 def create_encoding_runs() -> list[EncodingRun]:
-    """Create every encoding configuration required by the test suite.
+    """
+    Create every encoding configuration required by the test suite.
 
     Returns:
         A list containing the fixed encoders, Pgrams 2 through 16, and
@@ -97,18 +109,19 @@ def create_encoding_runs() -> list[EncodingRun]:
     """
     # These encoders do not require a parameter.
     runs: list[EncodingRun] = [
-        EncodingRun("Huffman", None, Huffman),
-        EncodingRun("Quaternary", None, Quaternary),
-        EncodingRun("Ternary", None, Ternary),
-        EncodingRun("Goldman", None, Goldman),
-        EncodingRun("DNAMap", None, DNAMap),
-        EncodingRun("DNAMapHuffman", None, DNAMapHuffman),
+        EncodingRun(Huffman.__name__, None, Huffman),
+        EncodingRun(Quaternary.__name__, None, Quaternary),
+        EncodingRun(Ternary.__name__, None, Ternary),
+        EncodingRun(ComplementaryTree.__name__, None, ComplementaryTree),
+        EncodingRun(Goldman.__name__, None, Goldman),
+        EncodingRun(DNAMap.__name__, None, DNAMap),
+        EncodingRun(DNAMapHuffman.__name__, None, DNAMapHuffman),
     ]
 
     # Pgrams needs to be tested for lengths 2 through 16 (like in paper)
     runs.extend(
         EncodingRun(
-            "Pgram",
+            Pgram.__name__,
             pgram_length,
             lambda length=pgram_length: Pgram(length),
         )
@@ -117,7 +130,7 @@ def create_encoding_runs() -> list[EncodingRun]:
     # BitScanQuaternary needs to be tested for scan lengths 4 through 52 (like in paper)
     runs.extend(
         EncodingRun(
-            "BitScanQuaternary",
+            BitScanQuaternary.__name__,
             scan_length,
             lambda length=scan_length: BitScanQuaternary(length),
             uses_binary_input=True,
@@ -128,10 +141,10 @@ def create_encoding_runs() -> list[EncodingRun]:
 
 
 def count_encoded_bases(encoded_payload: str | list[str]) -> int:
-    """Count DNA bases represented by an encoded JSON payload.
+    """
+    Count DNA bases represented by an encoded JSON payload.
 
-    Binary payloads use two bits per DNA base. Payloads already containing
-    DNA symbols use one character per base.
+    Binary payloads use two bits per DNA base. Payloads already containing DNA symbols use one character per base.
 
     Args:
         encoded_payload: An encoded string or a list of encoded segments.
@@ -143,11 +156,11 @@ def count_encoded_bases(encoded_payload: str | list[str]) -> int:
         ValueError: If the payload contains unsupported symbols.
     """
     # Segmented encoders store a list; joining it gives the complete payload.
-    payload: str = (
-        encoded_payload
-        if isinstance(encoded_payload, str)
-        else "".join(encoded_payload)
-    )
+    payload: str
+    if isinstance(encoded_payload, str):
+        payload = encoded_payload
+    else:
+        payload = "".join(encoded_payload)
 
     # If the payload is empty, return 0 bases
     if not payload:
@@ -162,11 +175,9 @@ def count_encoded_bases(encoded_payload: str | list[str]) -> int:
     raise ValueError("Encoded payload contains symbols that cannot represent DNA bases.")
 
 
-def measure_encoding(
-        source_file: Path,
-        run: EncodingRun,
-        temporary_directory: Path) -> Measurement:
-    """Encode one source file and count its encoded DNA bases.
+def measure_encoding(source_file: Path, run: EncodingRun, temporary_directory: Path) -> Measurement:
+    """
+    Encode one source file and count its encoded DNA bases.
 
     Args:
         source_file: The original file being measured.
@@ -186,9 +197,9 @@ def measure_encoding(
     output_file: Path = temporary_directory / f"{run.name}_{run.parameter}.json"
     payload: str
     _, payload = Serializer.encode_to_file(
-        encoder,
-        str(source_file),
-        str(output_file),
+        encoder=encoder,
+        in_path=str(source_file),
+        json_path=str(output_file),
         as_binary=run.uses_binary_input,
     )
 
@@ -203,7 +214,8 @@ def measure_encoding(
 
 
 def canterbury_files(directory: Path) -> list[Path]:
-    """Return sorted, visible regular files in a test directory.
+    """
+    Return sorted, visible regular files in a test directory.
 
     Args:
         directory: The directory containing the source files.
@@ -224,7 +236,8 @@ def canterbury_files(directory: Path) -> list[Path]:
 
 
 def create_summaries(measurements: list[Measurement]) -> dict[tuple[str, int | None], Summary]:
-    """Calculate average, minimum, and maximum rates per configuration.
+    """
+    Calculate average, minimum, and maximum rates per configuration.
 
     Args:
         measurements: The individual file measurements to group.
@@ -235,11 +248,12 @@ def create_summaries(measurements: list[Measurement]) -> dict[tuple[str, int | N
     # Group the measurements by method and parameter, then calculate the average, minimum, and maximum bases-per-byte 
     grouped_values: dict[tuple[str, int | None], list[float]] = {}
     for measurement in measurements:
-        configuration: tuple[str, int | None] = (
-            measurement.method,
-            measurement.parameter,
-        )
-        grouped_values.setdefault(configuration, []).append(measurement.bases_per_byte())
+        configuration: tuple[str, int | None] = (measurement.method, measurement.parameter)
+
+        # Add the bases-per-byte rate to the list for this configuration
+        if configuration not in grouped_values:
+            grouped_values[configuration] = []
+        grouped_values[configuration].append(measurement.bases_per_byte())
 
     # Each group has at least one measurement because it was created by a measurement.
     configurations: dict[tuple[str, int | None], Summary] = {}
@@ -267,7 +281,7 @@ def write_measurements(measurements: list[Measurement],
     """
     # Write out each measurement with its summary values. The summary values are repeated for each file to make the CSV 
     #   easier to analyze in a spreadsheet.
-    with output_path.open("w", newline="", encoding="utf-8") as output_file:
+    with output_path.open('w', newline='', encoding='utf-8') as output_file:
         writer = csv.writer(output_file)
         writer.writerow(
             [
@@ -300,9 +314,9 @@ def write_measurements(measurements: list[Measurement],
             )
 
 
-def write_terminal_table(summaries: list[Summary],
-                         output_path: Path | None = None) -> None:
-    """Write a readable summary table to the terminal.
+def write_terminal_table(summaries: list[Summary], output_path: Path | None = None) -> None:
+    """
+    Write a readable summary table to the terminal.
 
     Args:
         summaries: The cross-file statistics to display.
@@ -323,10 +337,14 @@ def write_terminal_table(summaries: list[Summary],
 
     # Make the table look nice by aligning the columns
     headers: list[str] = ["Method", "Parameter", "Average", "Minimum", "Maximum"]
-    column_widths: list[int] = [
-        max(len(headers[index]), *(len(row[index]) for row in rows))
-        for index in range(len(headers))
-    ]
+
+    # Get the maximum width of each column by checking the header and all rows
+    column_widths: list[int] = []
+    for index, header in enumerate(headers):
+        width = len(header)
+        for row in rows:
+            width = max(width, len(row[index]))
+        column_widths.append(width)
 
     # Calculate column widths first, then pad each value so the separators align.
     def format_row(row: list[str]) -> str:
@@ -349,7 +367,8 @@ def write_terminal_table(summaries: list[Summary],
 
 
 def main() -> None:
-    """Measure all requested encoders for every file in the selected directory.
+    """
+    Measure all requested encoders for every file in the selected directory.
 
     Raises:
         FileNotFoundError: If the selected source directory does not exist.

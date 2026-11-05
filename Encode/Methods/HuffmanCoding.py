@@ -874,13 +874,9 @@ class BitScanQuaternary(Quaternary):
         return (8 / self.K) * math.ceil(self.K / 2)
 
 
-    def print_info(self, 
-                   encoded_data: str | list[str], 
-                   huffman_codes: dict[str, str], 
-                   original_size: int, 
-                   k: int = 3) -> None:
-        super().print_info(encoded_data, huffman_codes, original_size, k)
-        print(f"\tK Used: {self.K}")
+    @override
+    def parameters(self) -> dict[str, Any]:
+        return {"K": self.K}
 
 
 
@@ -908,7 +904,7 @@ class Pgram(Huffman):
         # Max length of pgram
         self.M = m  
 
-        if self.M < 1:
+        if self.M < 0:
             raise ValueError("Maximum p-gram length must be greater than 0")
 
         self.EVEN: tuple[str, str] = ('G', 'T')
@@ -948,7 +944,7 @@ class Pgram(Huffman):
 
     # Maximum (rounded up) measured bases per byte by max p-gram length
     PGRAM_BASES_PER_BYTE: Final[dict[int, float]] = {
-        2: 4.5, 3: 4.0, 4: 3.5, 5: 3.2, 6: 2.9, 7: 2.7, 8: 2.5, 9: 2.3,
+        1: 5.1, 2: 4.5, 3: 4.0, 4: 3.5, 5: 3.2, 6: 2.9, 7: 2.7, 8: 2.5, 9: 2.3,
         10: 2.1, 11: 1.9, 12: 1.8, 13: 1.7, 14: 1.6, 15: 1.5, 16: 1.4,
     }
 
@@ -1410,7 +1406,7 @@ class Pgram(Huffman):
         Estimated bases per byte for this Pgram's max p-gram length (self.M).
 
         The rate drops as m grows, since longer p-grams get shorter codes per character. For m above the measured range 
-        this returns the m=6 value, which is conservative because the rate keeps falling.
+        this returns the m=16 value, which is conservative because the rate keeps falling.
 
         Returns:
             The estimated number of DNA bases per byte as a float.
@@ -1423,13 +1419,42 @@ class Pgram(Huffman):
         return Pgram.PGRAM_BASES_PER_BYTE[min(self.M, max(Pgram.PGRAM_BASES_PER_BYTE))]
 
 
-    def print_info(self, 
-                   encoded_data: str | list[str], 
-                   huffman_codes: dict[str, str], 
-                   original_size: int, 
-                   k: int = 2) -> None:
-        super().print_info(encoded_data, huffman_codes, original_size, k)
-        print(f"\tM Used: {self.M}")
+    @override
+    def parameters(self) -> dict[str, Any]:
+        return {"m": self.M}
+
+
+
+class ComplementaryTree(Pgram):
+    """
+    A Pgram with m=1, used to create a complementary tree for encoding.
+
+    This is just the complementary tree with an m=1. It what the Pgram paper used to encode and get their huffman codes.
+    """
+
+
+    def __init__(self) -> None:
+        """
+        Just a pgram but counting 1 character at a time
+        """
+        super().__init__(m=1)
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
+    #   GETTER METHODS                                                         #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+    @override
+    def get_spec_args(self) -> dict[str, Any]:
+        """
+        Gets the constructor arguments needed to rebuild this instance when loading a saved framer.
+
+        Returns:
+            A dictionary of constructor argument names to their values.
+        """
+        return {}
 
 
 
@@ -1753,12 +1778,3 @@ class Goldman(Huffman):
             The estimated number of DNA bases per byte as a float.
         """
         return self.ESTIMATED_BASES_PER_BYTE
-
-
-    @override
-    def print_info(self, 
-                   encoded_data: str | list[str], 
-                   huffman_codes: dict[str, str], 
-                   original_size: int, 
-                   k: int = 2) -> None:
-        super().print_info(encoded_data, huffman_codes, original_size, k)

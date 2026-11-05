@@ -13,7 +13,7 @@ from typing import Any, Generator
 from pathlib import Path
 from dataclasses import dataclass
 from Helpers.Errors import Error, ExpectedLengthError, IndexingError, PayloadLengthError, FramerConfigError, UnrankError
-from Encode.Methods.Encoding import Encoding
+from Encode.Methods.Encoding import Encoding, EncodingStats
 from Encode.Indexer import Indexer
 from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
 from Encode.ErrorCorrection.OuterCodes import OuterCodes
@@ -181,7 +181,7 @@ class OligoFormat:
         for index in range(self.num_oligos):
             index_sequence: str = self.indexer.unrank(
                 index=index, 
-                before_sequence=self.start_primer[-1], 
+                before_sequence=self.start_primer[-1] if self.start_primer else Huffman.START_BASE,
                 after_sequence=Huffman.START_BASE
             )
             indices.append(index_sequence)
@@ -431,7 +431,7 @@ class OligoFramer(OligoFormat):
         """
 
         # Get our file content
-        with open(self.in_path, "r", encoding="utf-8") as file:
+        with open(self.in_path, 'r', encoding='utf-8') as file:
             file_content: str = file.read()
         # Needed (not really needed but nice) as meta data for the deframer ensures proper reconstruction
         self.content_length = len(file_content)
@@ -445,12 +445,14 @@ class OligoFramer(OligoFormat):
             try:
                 indices, huffman_codes, encoded_segments = self._generate_segments(file_content)
                 self.huffman_codes = huffman_codes
+
             except (IndexingError, UnrankError):
                 # The estimate did not provide enough indices for the encoder's actual segment count. Unrank errors 
                 #   come from generating indices for a count that needs more than one width step from the last pass
                 self.width_left -= 1
                 self.indexer.width += 1
                 self._set_payload_length()
+                
                 continue
 
             # Recalculate the number of strands from the actual encoded payload (depending on if we have outer ECC)
@@ -592,8 +594,8 @@ class OligoFramer(OligoFormat):
 
     def print_info(self, original_size: int, k: int = 3) -> None:
         """
-        Prints the components and layout of the framed oligos, then the encoder's size information for the oligos
-        without their primers (the primers are the same on every oligo).
+        Prints the components and layout of the framed oligos, then measurements of the oligos. The runs and GC content
+        are measured without the primers, since the primers are the same on every oligo and chosen separately.
 
         Args:
             original_size: The size of the original file in bits.
@@ -608,28 +610,35 @@ class OligoFramer(OligoFormat):
         if not self.framed_oligos:
             raise RuntimeError("Call frame_all_oligos before printing info, the layout is not final until then.")
 
-        # Count the total bases in the oligos, including primers
-        total_bases: int = sum(len(oligo) for oligo in self.framed_oligos)
-
-        # Show off the config
+        # Components and layout
+        print(f"\tEncoder: {self.encoder.describe()}")
         print(f"\tIndexer: {type(self.indexer).__name__}")
         print(f"\tInner correction: {type(self.inner_correction).__name__ if self.inner_correction else 'None'}")
         print(f"\tOuter correction: {type(self.outer_correction).__name__ if self.outer_correction else 'None'}")
-        print(f"\tOligos: {self.num_oligos} of length {self.oligo_length}")
-        print(f"\tIndex width: {self.indexer.width}, payload length: {self.payload_length}, "
-              f"filler length: {self.filler_length}")
-        print(f"\tTotal bases (with primers): {total_bases}")
-        print(f"\tEffective bits per nucleotide (with primers): {original_size / total_bases:.3f} bits/base")
 
-        # The encoder measures the oligos without their primers
+        # Oligo layout and measurements
+        inner_length: int = self.inner_correction.get_dna_bases() if self.inner_correction else 0
+        # Same order as the parts are framed in
+        print(f"\tOligos: {self.num_oligos} of length {self.oligo_length} (start primer {len(self.start_primer)}, "
+              f"index {self.indexer.width}, payload {self.payload_length}, filler {self.filler_length}, "
+              f"checksum {self.checksum.get_dna_bases()}, inner RS {inner_length}, "
+              f"end primer {len(self.end_primer)})")
+
+        # With primers, only the size changes, since the primers are the same on every oligo
+        total_bases: int = 0
+        for oligo in self.framed_oligos:
+            total_bases += len(oligo)
+        print(f"\tWith primers: {total_bases} bases, {original_size / total_bases:.3f} bits/base")
+
+        # Measure the oligos without their primers
         start: int = len(self.start_primer)
         end: int = len(self.end_primer)
         bodies: list[str] = []
         for oligo in self.framed_oligos:
             bodies.append(oligo[start:len(oligo) - end])
 
-        # And print the encoder's info for the oligos without primers
-        self.encoder.print_info(bodies, self.huffman_codes, original_size, k)
+        print("\tWithout primers:")
+        EncodingStats(self.encoder, bodies, self.huffman_codes, k).print_info(original_size, indent="\t\t")
 
 
 

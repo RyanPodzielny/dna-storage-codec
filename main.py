@@ -7,12 +7,12 @@ check that it can be recovered.
 
 import sys
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from Encode.Methods.Encoding import Encoding
-from Encode.Methods.HuffmanCoding import Goldman, BitScanQuaternary, Pgram, Quaternary, Ternary
+from Encode.Methods.HuffmanCoding import ComplementaryTree, Goldman, BitScanQuaternary, Pgram, Quaternary, Ternary
 from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
 from Encode.Indexer import DNAMapIndexer, EnumerativeIndexer, GoldmanIndexer, Indexer
 from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
@@ -52,29 +52,18 @@ PGRAM_M: int = 8
 # Runs of at least this length are counted when printing info
 RUN_LENGTH_K: int = 3
 
-# The saved framer files take up most of the space (gigabytes over every combination). When False, a combination's
-#   saved file is deleted once it decodes 100%, so only the ones that failed are kept to look into
-KEEP_PASSING_ENCODED: bool = False
+# Every combination is saved and loaded in a temporary directory that is deleted right after. The saved framer files
+#   are big (gigabytes over every combination), so only the failed ones are copied to ENCODED_DIR and DECODED_DIR to 
+#   look into. Set to True to keep the passing ones too
+KEEP_PASSING: bool = False
 
 # Encoders whose payloads are homopolymer free, these can use the normal outer codes. Every other encoder can produce
 #   homopolymers, so it needs the DirectDNA outer codes
-HOMOPOLYMER_FREE: tuple[type, ...] = (Goldman, Pgram)
+HOMOPOLYMER_FREE: tuple[type, ...] = (Goldman, Pgram, ComplementaryTree)
 
-# Indexers by name, each takes the width (set by the framer) and the max run length. Using lambda to avoid creating the 
-#   indexers until they are needed, as some need to find the optimal k for the file
-INDEXERS: dict[str, Callable[[], Indexer]] = {
-    "Enumerative": lambda: EnumerativeIndexer(width=-1, max_run_length=MAX_RUN_LENGTH),
-    "Goldman": lambda: GoldmanIndexer(width=-1),
-    "DNAMap": lambda: DNAMapIndexer(width=-1),
-}
-
-# Outer codes by name, as (normal, DirectDNA). None means no outer code. Again lambda to avoid creating until needed.
-OUTER_CODES: dict[str, tuple[Callable[[], OuterCodes], Callable[[], OuterCodes]] | None] = {
-    "NoOuter": None,
-    "GoldmanRedundancy": (GoldmanRedundancy, DirectDNAGoldmanRedundancy),
-    "XOR": (XOR, DirectDNAXOR),
-    "RSOuter": (lambda: RSOuter(redundancy=OUTER_REDUNDANCY), lambda: DirectDNARSOuter(redundancy=OUTER_REDUNDANCY)),
-}
+# Indexers and outer codes to test, by name (see make_indexer and make_outer_code). NoOuter means no outer code
+INDEXER_NAMES: tuple[str, ...] = ("Enumerative", "Goldman", "DNAMap")
+OUTER_NAMES: tuple[str, ...] = ("NoOuter", "GoldmanRedundancy", "XOR", "RSOuter")
 
 
 #--------------------------------------------------------------------------#
@@ -120,7 +109,8 @@ def get_encoders(origin: str) -> list[Encoding]:
         Ternary(), 
         Quaternary(), 
         BitScanQuaternary(k=optimal_k), 
-        Pgram(PGRAM_M), 
+        Pgram(PGRAM_M),
+        ComplementaryTree(),
         Goldman(), 
         DNAMap(),
         DNAMapHuffman()
@@ -137,7 +127,7 @@ def get_encoder_name(encoder: Encoding) -> str:
     Returns:
         The encoder's class name, with its k or m appended (e.g. BitScanQuaternary-k6, Pgram-m8).
     """
-    # Name is basically Encoder-(param) if there is param (only saved if failed with KEEP_PASSING_ENCODED = False)
+    # Name is basically Encoder-(param) if there is param
     name: str = type(encoder).__name__
     if isinstance(encoder, BitScanQuaternary):
         name += f"-k{encoder.K}"
@@ -145,6 +135,59 @@ def get_encoder_name(encoder: Encoding) -> str:
         name += f"-m{encoder.M}"
 
     return name
+
+
+def make_indexer(name: str) -> Indexer:
+    """
+    Makes a new indexer by name. Every combination needs its own, since the framer changes the indexer's width.
+
+    Args:
+        name: The name of the indexer, one of INDEXER_NAMES.
+
+    Returns:
+        The indexer, with its width left for the framer to set.
+
+    Raises:
+        ValueError: If the name is not a known indexer.
+    """
+    match name:
+        case "Enumerative":
+            return EnumerativeIndexer(width=-1, max_run_length=MAX_RUN_LENGTH)
+        case "Goldman":
+            return GoldmanIndexer(width=-1)
+        case "DNAMap":
+            return DNAMapIndexer(width=-1)
+        case _:
+            raise ValueError(f"Unknown indexer: {name}")
+
+
+def make_outer_code(name: str, direct_dna: bool) -> OuterCodes | None:
+    """
+    Makes a new outer code by name.
+
+    Args:
+        name: The name of the outer code, one of OUTER_NAMES.
+        direct_dna: Whether to make the DirectDNA version, needed by encoders that can produce homopolymers.
+
+    Returns:
+        The outer code, or None for NoOuter.
+
+    Raises:
+        ValueError: If the name is not a known outer code.
+    """
+    match name:
+        case "NoOuter":
+            return None
+        case "GoldmanRedundancy":
+            return DirectDNAGoldmanRedundancy() if direct_dna else GoldmanRedundancy()
+        case "XOR":
+            return DirectDNAXOR() if direct_dna else XOR()
+        case "RSOuter":
+            if direct_dna:
+                return DirectDNARSOuter(redundancy=OUTER_REDUNDANCY)
+            return RSOuter(redundancy=OUTER_REDUNDANCY)
+        case _:
+            raise ValueError(f"Unknown outer code: {name}")
 
 
 def make_config(origin: str, 
@@ -158,23 +201,19 @@ def make_config(origin: str,
     Args:
         origin: The path to the original file.
         encoder: The encoder to frame with.
-        indexer_name: The name of the indexer in INDEXERS.
+        indexer_name: The name of the indexer, one of INDEXER_NAMES.
         use_inner: Whether to use an inner RS code.
-        outer_name: The name of the outer code in OUTER_CODES.
+        outer_name: The name of the outer code, one of OUTER_NAMES.
 
     Returns:
         The combination's name and its config.
     """
     # Get the indexer instance and its type for the inner code
-    indexer: Indexer = INDEXERS[indexer_name]()
+    indexer: Indexer = make_indexer(indexer_name)
     indexer_type: type = type(indexer)
 
-    outer_correction: OuterCodes | None = None
-    outer_codes: tuple[Callable[[], OuterCodes], Callable[[], OuterCodes]] | None = OUTER_CODES[outer_name]
     # Homopolymer producing encoders need the DirectDNA version of the outer code
-    if outer_codes is not None:
-        normal_outer, direct_outer = outer_codes
-        outer_correction = normal_outer() if isinstance(encoder, HOMOPOLYMER_FREE) else direct_outer()
+    outer_correction: OuterCodes | None = make_outer_code(outer_name, not isinstance(encoder, HOMOPOLYMER_FREE))
 
     # Add inner if requested
     inner_correction: RSInner | None = None
@@ -210,18 +249,22 @@ def make_config(origin: str,
 #--------------------------------------------------------------------------#
 
 
-def test_combination(origin: str, encoded_dir: Path, decoded_dir: Path, combination: str, config: FramerConfig,
+def test_combination(origin: str, 
+                     encoded_dir: Path, 
+                     decoded_dir: Path, 
+                     combination: str, 
+                     config: FramerConfig,
                      original_size: int) -> Result:
     """
-    Frames a file with one combination, saves it, then decodes it from only the saved file. To save space, a
-    combination that decodes 100% writes to one decoded file shared by every combination of the file (overwriting it),
-    and its saved framer file is deleted unless KEEP_PASSING_ENCODED is set. A combination that fails keeps both, named
-    after the combination.
+    Frames a file with one combination, saves it to a temporary directory, then decodes it from only the saved file.
+    The temporary directory is deleted after, so a combination that decodes 100% leaves nothing behind (unless
+    KEEP_PASSING is set). A combination that fails has its saved framer and decoded content copied out, named after
+    the combination, to look into.
 
     Args:
         origin: The path to the original file.
-        encoded_dir: The directory to save the framed file to.
-        decoded_dir: The directory to save the decoded file to.
+        encoded_dir: The directory to copy the saved framer file to if it fails.
+        decoded_dir: The directory to write the decoded file to if it fails.
         combination: The combination's name, used for the file names.
         config: The config to frame with.
         original_size: The size of the original file in bits.
@@ -229,58 +272,82 @@ def test_combination(origin: str, encoded_dir: Path, decoded_dir: Path, combinat
     Returns:
         The result of the test. Errors are caught and recorded so one combination can't stop the rest.
     """
-    file_name: str = Path(origin).name
-    result: Result = Result(file_name=file_name, combination=combination)
-
-    encoded_path: Path = encoded_dir / f"{combination}.json"
+    result: Result = Result(file_name=Path(origin).name, combination=combination)
 
     print(combination)
-    try:
-        # Frame and save
-        start: float = time.perf_counter()
-        framer: OligoFramer = OligoFramer(config)
-        framer.frame_all_oligos()
-        Serializer.save_framer(framer, str(encoded_path))
+    with TemporaryDirectory() as temp_dir:
+        encoded_path: Path = Path(temp_dir) / f"{combination}.json"
+        content: str | None = None
 
-        # Start the clock
-        encode_time: float = time.perf_counter() - start
-        start = time.perf_counter()
+        try:
+            # Frame and save
+            start: float = time.perf_counter()
+            framer: OligoFramer = OligoFramer(config)
+            framer.frame_all_oligos()
+            Serializer.save_framer(framer, str(encoded_path))
 
-        # Decode from the saved file, and check if it matches the original and how many oligos were recovered
-        deframer: OligoDeframer = Serializer.load_deframer(str(encoded_path))
-        decoded_oligos: list[str | None] = deframer.correct_all_oligos()
-        content: str = deframer.decode_to_string(decoded_oligos)
+            # Start the clock
+            encode_time: float = time.perf_counter() - start
+            start = time.perf_counter()
 
-        # STOP THE CLOCK
-        decode_time: float = time.perf_counter() - start
+            # Decode from the saved file
+            deframer: OligoDeframer = Serializer.load_deframer(str(encoded_path))
+            decoded_oligos: list[str | None] = deframer.correct_all_oligos()
+            content = deframer.decode_to_string(decoded_oligos)
 
-        # Check if the decoded content matches the original, and how many oligos were recovered
-        result.matches = deframer.matches_original(content)
-        result.recovered = deframer.calculate_recovered(decoded_oligos)
-        passed: bool = result.matches and result.recovered == 100.0
+            # STOP THE CLOCK
+            decode_time: float = time.perf_counter() - start
 
-        # A full decode is the same as every other full decode, so they all share (and overwrite) one file named
-        #   after the original. A failed decode gets its own file so it can be looked into
-        decoded_path: Path = decoded_dir / (file_name if passed else f"{combination}.txt")
-        with open(decoded_path, 'w', encoding='utf-8') as decoded_file:
-            decoded_file.write(content)
+            # Check if the decoded content matches the original, and how many oligos were recovered
+            result.matches = deframer.matches_original(content)
+            result.recovered = deframer.calculate_recovered(decoded_oligos)
 
-        # The saved framer file isn't needed once it decodes fully
-        if passed and not KEEP_PASSING_ENCODED:
-            encoded_path.unlink()
+            # Show off the results and info
+            framer.print_info(original_size, RUN_LENGTH_K)
+            print(f"\tEncode time: {encode_time:.2f}s, decode time: {decode_time:.2f}s")
+            print(f"\tMatches original hash: {result.matches}")
+            print(f"\tOligos recovered: {result.recovered:.2f}%")
 
-        # Show off the results and info
-        framer.print_info(original_size, RUN_LENGTH_K)
-        print(f"\tEncode time: {encode_time:.2f}s, decode time: {decode_time:.2f}s")
-        print(f"\tMatches original hash: {result.matches}")
-        print(f"\tOligos recovered: {result.recovered:.2f}%")
+        # Record the failure and keep going with the other combinations
+        except Exception as error:
+            result.error = f"{type(error).__name__}: {error}"
+            print(f"\tFAILED - {result.error}")
 
-    # Record the failure and keep going with the other combinations - will save the failed framer 
-    except Exception as error:
-        result.error = f"{type(error).__name__}: {error}"
-        print(f"\tFAILED - {result.error}")
+        # Copy out what we have before the temporary directory is deleted
+        passed: bool = result.matches and result.recovered == 100.0 and not result.error
+        if not passed or KEEP_PASSING:
+            keep_files(encoded_path, content, encoded_dir, decoded_dir, combination)
 
     return result
+
+
+def keep_files(encoded_path: Path, 
+               content: str | None, 
+               encoded_dir: Path, 
+               decoded_dir: Path, 
+               combination: str) -> None:
+    """
+    Copies a combination's saved framer file and writes its decoded content out of the temporary directory, for
+    whichever of them got made before it failed.
+
+    Args:
+        encoded_path: The saved framer file in the temporary directory.
+        content: The decoded content, or None if it didn't get that far.
+        encoded_dir: The directory to copy the saved framer file to.
+        decoded_dir: The directory to write the decoded content to.
+        combination: The combination's name, used for the file names.
+
+    Returns:
+        None
+    """
+    if encoded_path.exists():
+        encoded_dir.mkdir(parents=True, exist_ok=True)
+        (encoded_dir / encoded_path.name).write_text(encoded_path.read_text(encoding='utf-8'), encoding='utf-8')
+
+    if content is not None:
+        decoded_dir.mkdir(parents=True, exist_ok=True)
+        with open(decoded_dir / f"{combination}.txt", 'w', encoding='utf-8') as decoded_file:
+            decoded_file.write(content)
 
 
 def test_file(original_dir: Path, encoded_dir: Path, decoded_dir: Path, file_name: str) -> list[Result]:
@@ -289,20 +356,18 @@ def test_file(original_dir: Path, encoded_dir: Path, decoded_dir: Path, file_nam
 
     Args:
         original_dir: The directory containing the original file.
-        encoded_dir: The directory to save the framed files to.
-        decoded_dir: The directory to save the decoded files to.
+        encoded_dir: The directory to keep the failed framer files in.
+        decoded_dir: The directory to keep the failed decoded files in.
         file_name: The name of the file to test.
 
     Returns:
         The result of each combination.
     """
-    # Make a folder for the file in the encoded and decoded directories. Named with the extension (e.g. cp_html), as
-    #   files can share a stem (cp.html and cp.txt) and would overwrite each other
+    # A folder for the file in the encoded and decoded directories, only made if a combination fails. Named with the 
+    #   extension (e.g. cp_html), as files can share a stem (cp.html and cp.txt) and would overwrite each other
     folder_name: str = file_name.replace(".", "_")
     file_encoded_dir: Path = encoded_dir / folder_name
-    file_encoded_dir.mkdir(parents=True, exist_ok=True)
     file_decoded_dir: Path = decoded_dir / folder_name
-    file_decoded_dir.mkdir(parents=True, exist_ok=True)
 
     origin: str = str(original_dir / file_name)
     # Convert bytes to bits
@@ -314,11 +379,11 @@ def test_file(original_dir: Path, encoded_dir: Path, decoded_dir: Path, file_nam
     # Get all the encoder types
     for encoder in get_encoders(origin):
         # Get all the indexer types
-        for indexer_name in INDEXERS:
+        for indexer_name in INDEXER_NAMES:
             # See if we want to use an inner code or not
             for use_inner in (True, False):
                 # Get all the outer code types
-                for outer_name in OUTER_CODES:
+                for outer_name in OUTER_NAMES:
 
                     combination: str
                     config: FramerConfig
@@ -425,8 +490,7 @@ class Tee:
 def main() -> None:
     """
     Main function to run tests on framing and deframing the files in the specified directories and saves the results
-    to a timestamped text file in the Testing/Results directory. Clears the old encoded and decoded files first so
-    they don't get mixed up with the new ones.
+    to a timestamped text file in the Testing/Results directory.
 
     Returns:
         None

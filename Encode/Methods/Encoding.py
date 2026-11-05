@@ -233,57 +233,99 @@ class Encoding:
         return count, indices
 
 
-    def print_info(self,
-                   encoded_data: str | list[str],
-                   huffman_codes: dict[str, str],
-                   original_size: int,
-                   k: int = 3) -> None:
+    def parameters(self) -> dict[str, Any]:
         """
-        Prints the size information of the encoded data. Works on a whole file encoding (one string) or on a list of
-        sequences (e.g. framed oligos), where runs are counted within each sequence so none span two sequences.
+        The settings that change how this encoder encodes (e.g. K for BitScanQuaternary, m for Pgram). Subclasses with
+        settings override this so they show up when describing the encoder.
+
+        Returns:
+            A dictionary of setting name to value. Empty if the encoder has no settings.
+        """
+        return {}
+
+
+    def describe(self) -> str:
+        """
+        Describes the encoder by its class name and its settings, e.g. "Pgram (m=8)".
+
+        Returns:
+            The description as a string.
+        """
+        settings: str = ", ".join(f"{name}={value}" for name, value in self.parameters().items())
+        return f"{type(self).__name__} ({settings})" if settings else type(self).__name__
+
+
+
+class EncodingStats:
+    """
+    Measurements of data encoded by an encoder. Works on a whole file encoding (one string) or on a list of sequences
+    (e.g. framed oligos), where runs are counted within each sequence so none span two sequences. The DNA measurements
+    are left at 0 when the data is not DNA (e.g. standard Huffman).
+    """
+
+
+    def __init__(self, encoder: Encoding, encoded_data: str | list[str], huffman_codes: dict[str, str], k: int = 3):
+        """
+        Measures the encoded data.
 
         Args:
+            encoder: The encoder that encoded the data.
             encoded_data: The encoded data as one string or a list of strings.
             huffman_codes: The codes the encoder used (the DNA map for DNAMap).
-            original_size: The size of the original data in bits.
             k: The minimum length of a DNA run to be counted.
+        """
+        sequences: list[str] = Encoding.as_sequences(encoded_data)
+
+        self.k: int = k
+        self.encoded_size: int
+        self.table_size: int
+        self.encoded_size, self.table_size = encoder.calculate_overall_size(sequences, huffman_codes)
+
+        self.num_bases: int = 0
+        self.runs: int = 0
+        self.gc_content: float = 0.0
+
+        # Standard huffman isn't directly in DNA, so there are no bases to measure
+        if not all(set(sequence) <= Encoding.DNA_BASES for sequence in sequences):
+            return
+
+        # Count the bases, runs and G/C bases one sequence at a time, so a run never spans two sequences
+        gc_bases: int = 0
+        for sequence in sequences:
+            self.num_bases += len(sequence)
+            self.runs += encoder.count_runs(sequence, k)[0]
+            gc_bases += sequence.count('G') + sequence.count('C')
+
+        if self.num_bases > 0:
+            self.gc_content = gc_bases / self.num_bases * 100
+
+
+
+
+    def print_info(self, original_size: int, indent: str = "\t", describe: bool = False) -> None:
+        """
+        Prints the measurements.
+
+        Args:
+            original_size: The size of the original data in bits.
+            indent: What to put before each line.
 
         Returns:
             None
         """
-        sequences: list[str] = Encoding.as_sequences(encoded_data)
+        # If describe is True, print the encoder name and settings. Otherwise, just print the measurements.
+        if describe:
+            print(f"Encoder: {type(self).__name__} (k={self.k})")
 
-        # Calculate the size of the encoded data and the table
-        encoded_size: int
-        table_size: int
-        encoded_size, table_size = self.calculate_overall_size(sequences, huffman_codes)
+        print(f"{indent}Encoded data size: {self.encoded_size} bits")
+        print(f"{indent}Table size: {self.table_size} bits")
+        print(f"{indent}Total size: {self.encoded_size + self.table_size} bits")
 
-        print(f"{self.__class__.__name__} Encoding")
-        print(f"\tEncoded data size: {encoded_size} bits")
-        print(f"\tTable size: {table_size} bits")
-        print(f"\tTotal size: {encoded_size + table_size} bits")
-
-        # Standard huffman isn't directly in DNA, so there are no bases to measure
-        if not all(set(sequence) <= self.DNA_BASES for sequence in sequences):
+        # If there are no bases (not DNA, or empty), don't bother with the DNA measurements
+        if self.num_bases == 0:
             return
 
-        num_bases: int = sum(len(sequence) for sequence in sequences)
-        if num_bases == 0:
-            return
-
-        # Count the runs and G/C bases one sequence at a time, so a run never spans two sequences
-        runs: int = 0
-        gc_bases: int = 0
-        for sequence in sequences:
-            # Count runs of length >= k in the sequence
-            runs += self.count_runs(sequence, k)[0]
-            # Count G/C bases for GC content calculation
-            gc_bases += sequence.count('G') + sequence.count('C')
-
-        # Calculate GC content as a percentage of total bases
-        GC_content: float = gc_bases / num_bases * 100
-
-        print(f"\tNumber of runs of length >= {k}: {runs}")
-        print(f"\tNumber of bases in encoded data: {num_bases}")
-        print(f"\tGC content: {GC_content:.2f}%")
-        print(f"\tEffective Bits per Nucleotide: {original_size / num_bases:.2f} bits/base")
+        print(f"{indent}Number of bases: {self.num_bases}")
+        print(f"{indent}Number of runs of length >= {self.k}: {self.runs}")
+        print(f"{indent}GC content: {self.gc_content:.2f}%")
+        print(f"{indent}Effective bits per nucleotide: {original_size / self.num_bases:.3f} bits/base")
