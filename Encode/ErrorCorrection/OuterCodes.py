@@ -19,7 +19,7 @@ import math
 from Helpers.Errors import EncodingError, MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, \
     PayloadLengthError
 from Encode.Indexer import GoldmanIndexer
-from Encode.Methods.Encoding import Encoding
+from Encode.Methods.Encoding import Base, Encoding
 from Encode.Methods.HuffmanCoding import Goldman, Huffman
 
 
@@ -54,10 +54,10 @@ class OuterCodes():
 
 
     DNA_TO_DIGIT: Final[dict[str, int]] = {
-        "A": 0,
-        "C": 1,
-        "G": 2,
-        "T": 3,
+        Base.A.value: 0,
+        Base.C.value: 1,
+        Base.G.value: 2,
+        Base.T.value: 3,
     }
     DIGIT_TO_DNA: Final[dict[int, str]] = {v: k for k, v in DNA_TO_DIGIT.items()}
 

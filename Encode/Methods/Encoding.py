@@ -9,7 +9,21 @@ define specific encoding strategies.
 
 
 from abc import abstractmethod
+from enum import StrEnum
 from typing import Final, Any
+
+
+class Base(StrEnum):
+    """
+    A DNA base. The single place that says what the bases are - Encoding.DNA_BASES and the simulator configs both come
+    from here. Using enum instead of string so we can use pydantic's built in validation instead of writing our own
+    and still keep up with linting errors. 
+    """
+    A = "A"
+    C = "C"
+    G = "G"
+    T = "T"
+
 
 
 class Encoding:
@@ -59,12 +73,13 @@ class Encoding:
 
 
     # After encoding, use the binary string to map to DNA bases with its reverse
-    DNA_BASES: Final[set[str]] = {'A', 'C', 'G', 'T'}
+    # Plain strings from the Base enum, so the rest of the encoder can keep checking strings against it
+    DNA_BASES: Final[set[str]] = {base.value for base in Base}
     DNA_MAP: Final[dict[str, str]] = {
-        '00': 'A',
-        '01': 'C',
-        '10': 'G',
-        '11': 'T'
+        '00': Base.A.value,
+        '01': Base.C.value,
+        '10': Base.G.value,
+        '11': Base.T.value
     }
     REVERSE_DNA_MAP: Final[dict[str, str]] = {v: k for k, v in DNA_MAP.items()}
 
@@ -294,7 +309,7 @@ class EncodingStats:
         for sequence in sequences:
             self.num_bases += len(sequence)
             self.runs += encoder.count_runs(sequence, k)[0]
-            gc_bases += sequence.count('G') + sequence.count('C')
+            gc_bases += sequence.count(Base.G.value) + sequence.count(Base.C.value)
 
         if self.num_bases > 0:
             self.gc_content = gc_bases / self.num_bases * 100

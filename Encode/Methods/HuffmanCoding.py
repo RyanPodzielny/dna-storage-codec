@@ -12,7 +12,7 @@ be stored differently in a real application.
 import math
 from typing import Any, Final, override
 from Helpers.Errors import EncodingError, IndexingError, PayloadLengthError
-from Encode.Methods.Encoding import Encoding
+from Encode.Methods.Encoding import Base, Encoding
 from Helpers.PriorityQueue import PriorityQueue
 
 
@@ -53,9 +53,9 @@ class Huffman(Encoding):
     # For converting into trits
     GOLDMAN_ORDER: Final[tuple[str, ...]] = ('0', '1', '2')
     # Order for tree when Huffman has more than up to 4 children
-    TREE_ORDER: Final[tuple[str, ...]] = ('A', 'C', 'G', 'T')
+    TREE_ORDER: Final[tuple[str, ...]] = tuple(sorted(Encoding.DNA_BASES))
     # Certain methods require a starting base to not have homopolymers
-    START_BASE: Final[str] = 'A'
+    START_BASE: Final[str] = Base.A.value
 
     # Character used to pad oligos, needs to be added to trees (preferred over null bytes as nothing is encoded)
     CHUNKING_PADDING_CHAR: Final[str] = '' 

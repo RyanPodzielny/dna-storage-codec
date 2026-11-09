@@ -1,8 +1,8 @@
 """
-This module contains custom error classes shared by the Encode and Serialize packages. These errors are used to handle various exceptions
-that may occur during the encoding and decoding processes, including JSON errors, encoding errors, indexing errors,
-payload length errors, and error correction failures. Each error class provides a specific message to help identify
-the nature of the error and facilitate debugging
+This module contains custom error classes shared by the Encode and Serialize packages. These errors are used to handle 
+various exceptions that may occur during the encoding and decoding processes, including JSON errors, encoding errors, 
+indexing errors, payload length errors, and error correction failures. Each error class provides a specific message to 
+help identify the nature of the error and facilitate debugging
 """
 
 
@@ -173,17 +173,6 @@ class NotEnoughPreviousSegments(Error):
                  *,
                  message: str = "Not enough segments for error correction"):
         super().__init__(message=f"{message}: Cannot perform error correction due to insufficient segments.")
-
-
-
-class FramerConfigError(Error):
-    """
-    Error raised when the framer fails to correct a sequence.
-    """
-    def __init__(self, 
-                 *,
-                 message: str = "Framer failed"):
-        super().__init__(f"{message}: could not frame oligos.")
 
 
 

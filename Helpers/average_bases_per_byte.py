@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
 from Encode.Methods.Encoding import Encoding
 from Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryTree, Goldman, Huffman, Pgram, Quaternary, Ternary
-from Serialize.FileSerializer import Serializer
+from Serialize.EncoderSerializer import Serializer
 
 
 class EncodingRun:
@@ -196,7 +196,7 @@ def measure_encoding(source_file: Path, run: EncodingRun, temporary_directory: P
     # Each run gets a separate file, but the temporary directory is removed automatically when all files have been measured.
     output_file: Path = temporary_directory / f"{run.name}_{run.parameter}.json"
     payload: str
-    _, payload = Serializer.encode_to_file(
+    _, payload = Serializer.encode_as_single_segment(
         encoder=encoder,
         in_path=str(source_file),
         json_path=str(output_file),

@@ -13,7 +13,7 @@ import reedsolo
 from fastcrc import crc16, crc32
 from typing import Any, Callable, Final, override
 from Encode.Indexer import Indexer
-from Encode.Methods.Encoding import Encoding
+from Encode.Methods.Encoding import Base, Encoding
 from Helpers.Errors import InnerCodeError, RankError
 
 
@@ -328,7 +328,7 @@ class RSInner(InnerCodes):
 
 
     # Padding base for Reed-Solomon encoding
-    RS_PADDING: Final[str] = 'A' 
+    RS_PADDING: Final[str] = Base.A.value 
 
 
     #--------------------------------------------------------------------------#

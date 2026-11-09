@@ -8,75 +8,83 @@ oligos, corrects them, and outputs the original file content. Both share the lay
 
 import hashlib
 import math
+
 from reedsolo import ReedSolomonError
-from typing import Any, Generator
+from typing import Annotated, Any, Final, Generator
 from pathlib import Path
-from dataclasses import dataclass
-from Helpers.Errors import Error, ExpectedLengthError, IndexingError, PayloadLengthError, FramerConfigError, UnrankError
-from Encode.Methods.Encoding import Encoding, EncodingStats
+
+# Using pydantic to take care of the config 
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt, PositiveInt
+from pydantic.dataclasses import dataclass
+
+from Helpers.Errors import Error, ExpectedLengthError, IndexingError, PayloadLengthError, UnrankError
+from Encode.Methods.Encoding import Base, Encoding, EncodingStats
 from Encode.Indexer import Indexer
 from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
 from Encode.ErrorCorrection.OuterCodes import OuterCodes
 from Encode.Methods.HuffmanCoding import Goldman, Huffman
 
 
+#------------------------------------------------------------------------------#
+#                                                                              #
+#   TYPES                                                                      #
+#                                                                              #
+#------------------------------------------------------------------------------#
+
+
+# A primer, any number of bases (can be empty). Pattern is built from Base so the allowed letters come from Encoding,
+#   e.g. ^[ACGT]*$ - pydantic rejects anything else. Also works for full DNA strands
+Primer = Annotated[str, Field(pattern=f"^[{''.join(Base)}]*$")]
+
+
+
 @dataclass
-class FramerConfig:
+class FramerConfig(BaseModel):
     """
     Everything used to frame oligos for a single file. The in path is the file to read: the original file when framing,
     or the JSON file the framer saved when deframing (see Serializer.load_config).
 
     The components are mutable. The framer changes the indexer's width while running, so give each framer its own
     indexer rather than reusing one across files.
+
+    All the checks are single field checks written on the types, so there is no model validator. A bad config raises
+    pydantic's ValidationError listing every bad field.
     """
 
+    # Same as the error configs - no extra fields and validate on assignment, so the layout the framer writes back is
+    #   checked too. Arbitrary types lets the components (encoder, indexer, etc) be fields - they aren't pydantic so
+    #   only checks they are an instance of the right class, and keeps the same object
+    model_config = ConfigDict(
+        extra="forbid", 
+        validate_assignment=True, 
+        arbitrary_types_allowed=True
+    )
+
+    # The path to the input file to be framed, or the JSON file the framer saved when deframing.
     in_path: str
-    oligo_length: int
+
+    # The length of single oligo
+    oligo_length: PositiveInt
+
+    # The encoder, indexer, checksum, and optional inner and outer error correction codes used to frame the oligos.
     encoder: Encoding
     indexer: Indexer
     checksum: CheckSum
-    overhead_margin: float = 0.1
-    start_primer: str = ""
-    end_primer: str = ""
+    # Only used to find the index width when framing, can't be negative
+    overhead_margin: NonNegativeFloat = 0.1
+
+    # Primers can be empty - so framer will just use Huffman's default
+    start_primer: Primer = ""
+    end_primer: Primer = ""
+
+    # Don't always use correction, so can be none
     inner_correction: RSInner | None = None
     outer_correction: OuterCodes | None = None
 
-    # Layout, set by the framer after framing and by the Serializer when loading
-    num_oligos: int = 0
-    payload_length: int = 0
-    filler_length: int = 0
-
-
-    #--------------------------------------------------------------------------#
-    #                                                                          #
-    #   CLASS METHODS                                                          #
-    #                                                                          #
-    #--------------------------------------------------------------------------#
-
-
-    def __post_init__(self) -> None:
-        """
-        Validates the settings and resolves empty primers to the default start base.
-
-        Primers can be empty - so framer will just use Huffman's default 
-
-        Raises:
-            FramerConfigError: If the oligo length is not positive, the overhead margin is negative, or a primer 
-                contains something other than A, C, G, or T.
-        """
-        if self.oligo_length <= 0:
-            raise FramerConfigError(
-                message=f"oligo_length must be greater than 0, got {self.oligo_length}"
-            )
-        if self.overhead_margin < 0:
-            raise FramerConfigError(
-                message=f"overhead_margin must be non-negative, got {self.overhead_margin}."
-            )
-
-        if not set(self.start_primer + self.end_primer) <= Encoding.DNA_BASES:
-            raise FramerConfigError(
-                message=f"Primers must only contain A, C, G, or T - got start: {self.start_primer}, end: {self.end_primer}"
-            )
+    # Layout, set by the framer after framing and by the Serializer when loading. 0 until the framer sizes the oligos.
+    num_oligos: NonNegativeInt = 0
+    payload_length: NonNegativeInt = 0
+    filler_length: NonNegativeInt = 0
 
 
 
@@ -96,22 +104,10 @@ class OligoFormat:
             config: The config holding the oligo settings and components.
         """
 
-        # All errors are resolved in the FrammerCofing, no need to check here
+        # All errors are resolved in the FramerConfig, no need to check here. Everything reads its settings and layout
+        #   straight from the config (self.config.oligo_length, self.config.indexer, etc) instead of copying them, so
+        #   there is only one copy - the framer sets the layout on the config, and every change to it is validated.
         self.config: FramerConfig = config
-
-        self.oligo_length: int = config.oligo_length
-        self.start_primer: str = config.start_primer
-        self.end_primer: str = config.end_primer
-        self.encoder: Encoding = config.encoder
-        self.indexer: Indexer = config.indexer
-        self.checksum: CheckSum = config.checksum
-        self.inner_correction: RSInner | None = config.inner_correction
-        self.outer_correction: OuterCodes | None = config.outer_correction
-
-        # The layout, 0 until the framer sizes the oligos, or the saved layout when deframing
-        self.num_oligos: int = config.num_oligos
-        self.payload_length: int = config.payload_length
-        self.filler_length: int = config.filler_length
 
 
     #--------------------------------------------------------------------------#
@@ -154,12 +150,12 @@ class OligoFormat:
         Returns:
             The filler bases, empty if there is no filler.
         """
-        if self.filler_length == 0:
+        if self.config.filler_length == 0:
             return ""
 
         previous_base: str = payload_sequence[-1] if payload_sequence else Huffman.START_BASE
         # Not using specific indexer type, this works fine
-        filler_sequence: str = Goldman().trit_to_dna("0" * self.filler_length, previous_base)
+        filler_sequence: str = Goldman().trit_to_dna("0" * self.config.filler_length, previous_base)
 
         return filler_sequence
 
@@ -178,10 +174,10 @@ class OligoFormat:
 
         # Generate all indices needed by payload and outer-code strands.
         indices: list[str] = []
-        for index in range(self.num_oligos):
-            index_sequence: str = self.indexer.unrank(
+        for index in range(self.config.num_oligos):
+            index_sequence: str = self.config.indexer.unrank(
                 index=index, 
-                before_sequence=self.start_primer[-1] if self.start_primer else Huffman.START_BASE,
+                before_sequence=self.config.start_primer[-1] if self.config.start_primer else Huffman.START_BASE,
                 after_sequence=Huffman.START_BASE
             )
             indices.append(index_sequence)
@@ -200,7 +196,7 @@ class OligoFormat:
             The oligo sequence with primers added.
         """
 
-        return self.start_primer + oligo + self.end_primer
+        return self.config.start_primer + oligo + self.config.end_primer
 
 
 
@@ -227,33 +223,26 @@ class OligoFramer(OligoFormat):
 
         # Need to see how much width is left for the payload to determine the number of oligos and the index width
         self.width_left: int = 0
-        self.width_left += self.oligo_length - len(self.start_primer) - len(self.end_primer) \
-                           - self.checksum.get_dna_bases()
+        self.width_left += self.config.oligo_length - len(self.config.start_primer) - len(self.config.end_primer) \
+                           - self.config.checksum.get_dna_bases()
         # If we have inner codes, we need to ensure we count them
-        if self.inner_correction:
-            self.width_left -= self.inner_correction.get_dna_bases()
+        if self.config.inner_correction:
+            self.width_left -= self.config.inner_correction.get_dna_bases()
         
         # Determine the number of oligos and the index width based on the available width and overhead margin
-        self.num_oligos, self.indexer.width = OligoFramer.determine_oligos_and_width(
+        self.config.num_oligos, self.config.indexer.width = OligoFramer.determine_oligos_and_width(
             overhead_margin=config.overhead_margin, 
             width_left=self.width_left,
             in_path=self.in_path,
-            encoder=self.encoder, 
-            indexer=self.indexer,
-            outer_error_correction=self.outer_correction
+            encoder=self.config.encoder, 
+            indexer=self.config.indexer,
+            outer_error_correction=self.config.outer_correction
         )
-        self.width_left -= self.indexer.width
+        self.width_left -= self.config.indexer.width
 
         # Finally, the payload length, which can be found after the index width is determined. We set it based on the 
         #   width left after accounting for primers, index, checksum, inner/outer(filling)correction
         self._set_payload_length()
-
-        if self.payload_length <= 0:
-            raise PayloadLengthError(
-                message="Payload length must be greater than 0 after accounting for " \
-                        "primers, index, checksum, and inner error correction", 
-                payload_length=self.payload_length
-            )
 
         # Filled in by frame_all_oligos, saved so the deframer can decode
         self.content_length: int = 0
@@ -359,12 +348,26 @@ class OligoFramer(OligoFormat):
         Sets the payload length from the width left. The outer code may need a shorter payload (RSOuter needs full
         six-base columns), so any bases it can't use become filler between the payload and checksum. This keeps the
         oligo length the same.
-        """
-        self.payload_length = self.width_left
-        if self.outer_correction:
-            self.payload_length = self.outer_correction.align_payload_length(self.width_left)
 
-        self.filler_length = self.width_left - self.payload_length
+        Raises:
+            PayloadLengthError: If the payload length is less than or equal to 0 after accounting for primers, index,
+                checksum, and inner error correction.
+        """
+        payload_length: int = self.width_left
+        # Update the payload length based on the outer error correction scheme, if any
+        if self.config.outer_correction:
+            payload_length = self.config.outer_correction.align_payload_length(self.width_left)
+
+        # If payloadlength is 0 here, means we don't have enough room
+        if payload_length <= 0:
+            raise PayloadLengthError(
+                message="Payload length must be greater than 0 after accounting for " \
+                        "primers, index, checksum, and inner error correction",
+                payload_length=payload_length
+            )
+
+        self.config.payload_length = payload_length
+        self.config.filler_length = self.width_left - payload_length
 
 
     def _generate_segments(self, file_content: str) -> tuple[list[str], dict[str, str], list[str]]:
@@ -389,13 +392,13 @@ class OligoFramer(OligoFormat):
 
         # Select the payload indices based on the outer error correction scheme, if any
         payload_indices: list[str] = indices
-        if self.outer_correction:
-            payload_indices = self.outer_correction.select_payload_indices(indices)
+        if self.config.outer_correction:
+            payload_indices = self.config.outer_correction.select_payload_indices(indices)
 
         # Encode the file content into segments
-        items: tuple[dict[str, str], list[str], Any] = self.encoder.encode_segments(
+        items: tuple[dict[str, str], list[str], Any] = self.config.encoder.encode_segments(
             data=file_content, 
-            payload_length=self.payload_length, 
+            payload_length=self.config.payload_length, 
             previous_sequences=payload_indices
         )
 
@@ -403,7 +406,7 @@ class OligoFramer(OligoFormat):
         encoded_segments: list[str] = items[1]
 
         # Update our number of oligos based on the actual number of encoded segments
-        self.num_oligos = len(encoded_segments)
+        self.config.num_oligos = len(encoded_segments)
 
         return payload_indices, huffman_codes, encoded_segments
 
@@ -450,25 +453,25 @@ class OligoFramer(OligoFormat):
                 # The estimate did not provide enough indices for the encoder's actual segment count. Unrank errors 
                 #   come from generating indices for a count that needs more than one width step from the last pass
                 self.width_left -= 1
-                self.indexer.width += 1
+                self.config.indexer.width += 1
                 self._set_payload_length()
                 
                 continue
 
             # Recalculate the number of strands from the actual encoded payload (depending on if we have outer ECC)
-            if self.outer_correction:
-                self.num_oligos = self.outer_correction.calculate_total_strands(len(encoded_segments))
+            if self.config.outer_correction:
+                self.config.num_oligos = self.config.outer_correction.calculate_total_strands(len(encoded_segments))
 
             # Ensure the indexer can address every payload and parity strand.
-            if self.indexer.calculate_total_valid_indices() >= self.num_oligos:
+            if self.config.indexer.calculate_total_valid_indices() >= self.config.num_oligos:
                 # Now that we know the index fits, generate the indices for the parity strands too
-                if self.outer_correction:
+                if self.config.outer_correction:
                     indices = self._generate_indices()
                 break
 
             # Increase the index width and recalculate the payload length
             self.width_left -= 1
-            self.indexer.width += 1
+            self.config.indexer.width += 1
             self._set_payload_length()
 
         return indices, huffman_codes, encoded_segments
@@ -498,10 +501,10 @@ class OligoFramer(OligoFormat):
             PayloadLengthError: If the payload length is less than or equal to 0.
             UnrankError: If the index sequence is not in bounds of capacity.
         """
-        if self.payload_length <= 0:
+        if self.config.payload_length <= 0:
             raise PayloadLengthError(
                 message="Payload length must be greater than 0",
-                payload_length=self.payload_length
+                payload_length=self.config.payload_length
             )
 
         # Filler pads the payload up to the width left when the outer code needs a shorter payload. It holds no data so
@@ -509,32 +512,32 @@ class OligoFramer(OligoFormat):
         filler_sequence: str = self._generate_filler(payload_sequence)
 
         # Calculate the checksum sequence
-        checksum_sequence: str = self.checksum.encode_to_dna(
+        checksum_sequence: str = self.config.checksum.encode_to_dna(
             before_sequence=payload_sequence + filler_sequence,
-            after_sequence=self.end_primer,
-            checksum=self.checksum.calculate_checksum(index_sequence + payload_sequence),
+            after_sequence=self.config.end_primer,
+            checksum=self.config.checksum.calculate_checksum(index_sequence + payload_sequence),
         )
 
         # Calculate the Reed-Solomon parity sequence if inner error correction is enabled
         rs_parity_sequence: str = ""
-        if self.inner_correction:
+        if self.config.inner_correction:
             protected_sequence: str = index_sequence + payload_sequence + checksum_sequence
-            rs_parity_sequence: str = self.inner_correction.encode_to_dna(
+            rs_parity_sequence: str = self.config.inner_correction.encode_to_dna(
                 before_sequence=checksum_sequence,
-                after_sequence=self.end_primer,
+                after_sequence=self.config.end_primer,
                 encoded_data=protected_sequence
             )
 
         # Add primers if requested
         framed_oligo: str = ""
         if include_primers:
-            framed_oligo = self.start_primer +\
+            framed_oligo = self.config.start_primer +\
                            index_sequence +\
                            payload_sequence +\
                            filler_sequence +\
                            checksum_sequence +\
                            rs_parity_sequence +\
-                           self.end_primer
+                           self.config.end_primer
         else:
             framed_oligo = index_sequence +\
                            payload_sequence +\
@@ -568,12 +571,12 @@ class OligoFramer(OligoFormat):
 
         # If we have outer correction, we need to add the parity segments to the payload segments, so that they are all
         #   in order. The outer code decides the order (and if the payload strands are framed at all)
-        if self.outer_correction:
+        if self.config.outer_correction:
             # Get our parity segments - these are the extra strands
-            parity_segments: list[str] = self.outer_correction.add_redundancy(indices, encoded_segments)
+            parity_segments: list[str] = self.config.outer_correction.add_redundancy(indices, encoded_segments)
 
             # Update the encoded segments to include the parity segments
-            encoded_segments = self.outer_correction.arrange_strands(encoded_segments, parity_segments)
+            encoded_segments = self.config.outer_correction.arrange_strands(encoded_segments, parity_segments)
 
         # And frame them
         framed_oligos: list[str] = []
@@ -581,12 +584,8 @@ class OligoFramer(OligoFormat):
             framed_oligo: str = self.frame_oligo(indices[index], payload_sequence)
             framed_oligos.append(framed_oligo)
 
+        # The layout was set straight on the config as it was worked out, so it is already ready to save
         self.framed_oligos = framed_oligos
-
-        # The layout is final now, keep the config in sync so saving the config saves the layout
-        self.config.num_oligos = self.num_oligos
-        self.config.payload_length = self.payload_length
-        self.config.filler_length = self.filler_length
 
         # Copy so callers adding errors to the oligos don't change what gets saved
         return framed_oligos.copy()
@@ -610,19 +609,23 @@ class OligoFramer(OligoFormat):
         if not self.framed_oligos:
             raise RuntimeError("Call frame_all_oligos before printing info, the layout is not final until then.")
 
+        # Short name, this reads a lot of the config
+        config: FramerConfig = self.config
+
         # Components and layout
-        print(f"\tEncoder: {self.encoder.describe()}")
-        print(f"\tIndexer: {type(self.indexer).__name__}")
-        print(f"\tInner correction: {type(self.inner_correction).__name__ if self.inner_correction else 'None'}")
-        print(f"\tOuter correction: {type(self.outer_correction).__name__ if self.outer_correction else 'None'}")
+        print(f"\tEncoder: {config.encoder.describe()}")
+        print(f"\tIndexer: {type(config.indexer).__name__}")
+        print(f"\tInner correction: {type(config.inner_correction).__name__ if config.inner_correction else 'None'}")
+        print(f"\tOuter correction: {type(config.outer_correction).__name__ if config.outer_correction else 'None'}")
 
         # Oligo layout and measurements
-        inner_length: int = self.inner_correction.get_dna_bases() if self.inner_correction else 0
+        inner_length: int = config.inner_correction.get_dna_bases() if config.inner_correction else 0
         # Same order as the parts are framed in
-        print(f"\tOligos: {self.num_oligos} of length {self.oligo_length} (start primer {len(self.start_primer)}, "
-              f"index {self.indexer.width}, payload {self.payload_length}, filler {self.filler_length}, "
-              f"checksum {self.checksum.get_dna_bases()}, inner RS {inner_length}, "
-              f"end primer {len(self.end_primer)})")
+        print(f"\tOligos: {config.num_oligos} of length {config.oligo_length} "
+              f"(start primer {len(config.start_primer)}, index {config.indexer.width}, "
+              f"payload {config.payload_length}, filler {config.filler_length}, "
+              f"checksum {config.checksum.get_dna_bases()}, inner RS {inner_length}, "
+              f"end primer {len(config.end_primer)})")
 
         # With primers, only the size changes, since the primers are the same on every oligo
         total_bases: int = 0
@@ -631,14 +634,14 @@ class OligoFramer(OligoFormat):
         print(f"\tWith primers: {total_bases} bases, {original_size / total_bases:.3f} bits/base")
 
         # Measure the oligos without their primers
-        start: int = len(self.start_primer)
-        end: int = len(self.end_primer)
+        start: int = len(config.start_primer)
+        end: int = len(config.end_primer)
         bodies: list[str] = []
         for oligo in self.framed_oligos:
             bodies.append(oligo[start:len(oligo) - end])
 
         print("\tWithout primers:")
-        EncodingStats(self.encoder, bodies, self.huffman_codes, k).print_info(original_size, indent="\t\t")
+        EncodingStats(config.encoder, bodies, self.huffman_codes, k).print_info(original_size, indent="\t\t")
 
 
 
@@ -678,6 +681,17 @@ class OligoDeframer(OligoFormat):
 
     #--------------------------------------------------------------------------#
     #                                                                          #
+    #   CLASS CONSTANTS                                                        #
+    #                                                                          #
+    #--------------------------------------------------------------------------#
+
+
+    # Placeholder for missing payloads in the sorted list
+    MISSING_PAYLOAD: Final[str] = "\n\nMISSING\n\n"  
+
+
+    #--------------------------------------------------------------------------#
+    #                                                                          #
     #   PRIVATE HELPER METHODS                                                 #
     #                                                                          #
     #--------------------------------------------------------------------------#
@@ -697,12 +711,12 @@ class OligoDeframer(OligoFormat):
         """
         try:
             # Decode the checksum from the DNA sequence and verify it against the index and payload
-            checksum: int = self.checksum.decode_from_dna(
+            checksum: int = self.config.checksum.decode_from_dna(
                 encoded_data=checksum_sequence,
                 before_sequence=payload_sequence + self._generate_filler(payload_sequence),
-                after_sequence=self.end_primer
+                after_sequence=self.config.end_primer
             )
-            return self.checksum.verify_checksum(
+            return self.config.checksum.verify_checksum(
                 encoded_data=index_sequence + payload_sequence,
                 checksum=checksum
             )
@@ -740,22 +754,22 @@ class OligoDeframer(OligoFormat):
             KeyError: If the indexer fails to unrank the corrected parity bytes back to DNA sequences.
             ExpectedLengthError: If the length of the corrected oligo does not match the expected length.
         """
-        if not self.inner_correction:
+        if not self.config.inner_correction:
             return None
 
         # Correct the oligo using RS codes
         encoded_data: str = index_sequence + payload_sequence + checksum_sequence
         corrected_data: str
         corrected_parity: str
-        corrected_data, corrected_parity = self.inner_correction.decode_from_dna(
+        corrected_data, corrected_parity = self.config.inner_correction.decode_from_dna(
             encoded_data=encoded_data,
             before_sequence=checksum_sequence,
-            after_sequence=self.end_primer,
+            after_sequence=self.config.end_primer,
             parity_dna_sequence=rs_sequence,
         )
 
         # The inner RS does not cover the filler, so put it back after the payload before unframing
-        filler_start: int = self.indexer.width + self.payload_length
+        filler_start: int = self.config.indexer.width + self.config.payload_length
         corrected_data = corrected_data[:filler_start] +\
                          self._generate_filler(corrected_data[:filler_start]) +\
                          corrected_data[filler_start:]
@@ -766,7 +780,7 @@ class OligoDeframer(OligoFormat):
         corrected_checksum: str
         corrected_index, corrected_payload, corrected_checksum, corrected_parity = self.unframe_oligo(
             framed_oligo=corrected_data + corrected_parity,
-            expected_length=self.oligo_length,
+            expected_length=self.config.oligo_length,
             include_primers=False
         )
 
@@ -832,15 +846,15 @@ class OligoDeframer(OligoFormat):
             ExpectedLengthError: If the length of the framed oligo does not match the expected length
         """
         # Calculate the lengths of the various components
-        start_primer_length: int = len(self.start_primer)
-        end_primer_length: int = len(self.end_primer)
+        start_primer_length: int = len(self.config.start_primer)
+        end_primer_length: int = len(self.config.end_primer)
         if not include_primers:
             expected_length -= start_primer_length + end_primer_length
             start_primer_length = 0
             end_primer_length = 0
 
-        checksum_length: int = self.checksum.get_dna_bases()
-        rs_parity_length: int = self.inner_correction.get_dna_bases() if self.inner_correction else 0
+        checksum_length: int = self.config.checksum.get_dna_bases()
+        rs_parity_length: int = self.config.inner_correction.get_dna_bases() if self.config.inner_correction else 0
 
         # Ensure the framed oligo is of the expected length
         if len(framed_oligo) != expected_length:
@@ -850,21 +864,21 @@ class OligoDeframer(OligoFormat):
             )
 
         # Extract the index sequence
-        index_sequence: str = framed_oligo[start_primer_length:start_primer_length + self.indexer.width]
+        index_sequence: str = framed_oligo[start_primer_length:start_primer_length + self.config.indexer.width]
 
         # Extract the payload sequence
-        payload_start: int = start_primer_length + self.indexer.width
-        payload_end: int = payload_start + self.payload_length
+        payload_start: int = start_primer_length + self.config.indexer.width
+        payload_end: int = payload_start + self.config.payload_length
         payload_sequence: str = framed_oligo[payload_start:payload_end]
 
         # Extract the checksum sequence, skipping over the filler
-        checksum_start: int = payload_end + self.filler_length
+        checksum_start: int = payload_end + self.config.filler_length
         checksum_end: int = checksum_start + checksum_length
         checksum_sequence: str = framed_oligo[checksum_start:checksum_end]
 
         # Extract the RS parity sequence if inner error correction is enabled
         rs_sequence: str = ""
-        if self.inner_correction:
+        if self.config.inner_correction:
             rs_parity_start: int = checksum_end
             rs_parity_end: int = rs_parity_start + rs_parity_length
             rs_sequence: str = framed_oligo[rs_parity_start:rs_parity_end]
@@ -887,7 +901,7 @@ class OligoDeframer(OligoFormat):
         Raises:
             ExpectedLengthError: If the length of any framed oligo does not match the expected length.
         """
-        expected_length: int = self.oligo_length
+        expected_length: int = self.config.oligo_length
 
         # Go through each framed oligo and unframe it, yielding the results
         for framed_oligo in framed_oligos:
@@ -917,7 +931,7 @@ class OligoDeframer(OligoFormat):
         recovered_payloads: dict[str, str] = {}
 
         # Primers don't matter here, so remove them from expected length
-        expected_length: int = self.oligo_length - len(self.start_primer) - len(self.end_primer)
+        expected_length: int = self.config.oligo_length - len(self.config.start_primer) - len(self.config.end_primer)
 
         # For all our unframed oligos, check if the checksum is valid, if not, try to correct it with RS codes
         for index_sequence, payload_sequence, checksum_sequence, rs_sequence in self.unframe_all_oligos(self.oligos):
@@ -925,13 +939,13 @@ class OligoDeframer(OligoFormat):
             oligo: str = index_sequence + payload_sequence + checksum_sequence + rs_sequence
 
             # Skip (erasure) if the oligo is not the expected length
-            if len(oligo) + self.filler_length != expected_length:
+            if len(oligo) + self.config.filler_length != expected_length:
                 continue
 
             # If we couldn't validate the checksum, try to correct with inner RS if we have it
             if not self._checksum_is_valid(index_sequence, payload_sequence, checksum_sequence):
                 # No inner correction means we can't correct it, so skip (erasure)
-                if not self.inner_correction:
+                if not self.config.inner_correction:
                     continue
 
                 # Try to correct the oligo with inner RS codes. If it fails, skip (erasure)
@@ -966,17 +980,17 @@ class OligoDeframer(OligoFormat):
         payload_segments: list[str | None] = self._sort_payloads(indices, recovered_payloads)
 
         # Correct the payload segments with outer error correction if we have it
-        if self.outer_correction:
-            payload_segments = self.outer_correction.perform_correction(indices, payload_segments)
+        if self.config.outer_correction:
+            payload_segments = self.config.outer_correction.perform_correction(indices, payload_segments)
 
         # Rotation based encoders (Goldman) need the base before each payload, same indices we used when encoding.
         #   Outer correction removed the parity strands, so drop their indices too
         payload_indices: list[str] = indices
-        if self.outer_correction:
-            payload_indices = self.outer_correction.select_payload_indices(indices)
+        if self.config.outer_correction:
+            payload_indices = self.config.outer_correction.select_payload_indices(indices)
 
         # Decode the payload segments back into the original file content where we can
-        decoded_segments = self.encoder.decode_segments(
+        decoded_segments = self.config.encoder.decode_segments(
             encoded_data=payload_segments,
             huffman_codes=self.huffman_codes,
             previous_sequences=payload_indices
@@ -996,7 +1010,15 @@ class OligoDeframer(OligoFormat):
             The decoded original file content as a string.
         """
         # Join the decoded segments into a single string
-        decoded_content: str = "".join(segment for segment in decoded_oligos if segment is not None)
+        decoded_content: str = ""
+
+        # Put them all together, using a placeholder for any missing segments.
+        for segment in decoded_oligos:
+            if segment is not None:
+                decoded_content += segment
+            else:
+                decoded_content += OligoDeframer.MISSING_PAYLOAD 
+
         return decoded_content
 
 

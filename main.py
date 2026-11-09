@@ -19,7 +19,7 @@ from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
 from Encode.ErrorCorrection.OuterCodes import DirectDNAGoldmanRedundancy, DirectDNARSOuter, DirectDNAXOR, \
     GoldmanRedundancy, OuterCodes, RSOuter, XOR
 from Encode.OligoFramer import FramerConfig, OligoDeframer, OligoFramer
-from Serialize.FileSerializer import Serializer
+from Serialize.EncoderSerializer import Serializer
 
 
 #--------------------------------------------------------------------------#
