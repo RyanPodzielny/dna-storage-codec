@@ -28,7 +28,6 @@ StageConfig = AgingConfig | PCRConfig | SequencingConfig | SynthesisConfig
 
 
 
-@dataclass
 class SavedStage(BaseModel):
     """
     A single stage's config, the whole file saved by save_stage.
@@ -43,7 +42,6 @@ class SavedStage(BaseModel):
 
 
 
-@dataclass
 class SavedSimulation(BaseModel):
     """
     Every stage's config for a whole simulation, the whole file saved by save_simulation. Each field only takes its own

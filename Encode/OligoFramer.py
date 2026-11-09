@@ -38,7 +38,6 @@ Primer = Annotated[str, Field(pattern=f"^[{''.join(Base)}]*$")]
 
 
 
-@dataclass
 class FramerConfig(BaseModel):
     """
     Everything used to frame oligos for a single file. The in path is the file to read: the original file when framing,

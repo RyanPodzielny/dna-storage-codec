@@ -49,7 +49,6 @@ Component = Annotated[Encoding, Indexer, InnerCodes, OuterCodes]
 
 
 
-@dataclass
 class SavedFramer(BaseModel):
     """
     Everything the deframer needs to decode a file, the whole file saved by save_framer. The config is a plain
@@ -72,7 +71,6 @@ class SavedFramer(BaseModel):
 
 
 
-@dataclass
 class SavedSingleSegment(BaseModel):
     """
     A whole file encoded as one sequence (no framing), the whole file saved by encode_as_single_segment. Mostly used

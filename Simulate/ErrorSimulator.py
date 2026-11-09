@@ -17,15 +17,14 @@ Which gives amazing insights into how/where errors happen in the storage channel
 
 import math
 from enum import StrEnum
-from typing import Annotated, Any, Final, Literal
+from typing import Annotated, Final, Literal
 
 # Using pydantic instead of just dataclasses to validate the config, so we don't have to write our own validation code. 
 #   It is a bit of a pain to learn, but it is worth it espically since it can validate when a user changes a field after
 #   creation. Everything that is simple is used as types, otherwise we use model validatosr to ensure the config
 #   remains valid. Also json serialization is so easy, so worth it.
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt, PositiveFloat, PositiveInt, \
-    model_validator, ValidationError
-from pydantic.dataclasses import dataclass
+    model_validator
 
 from Encode.Methods.Encoding import Base
 
@@ -80,64 +79,20 @@ RunLength = Annotated[int, Field(ge=2)]
 DNA_BASES: Final[tuple[Base, ...]] = tuple(Base)
 
 # Pydantic copies mutable defaults for every instance, so these are never shared
-UNIFORM_WEIGHTS: Final[dict[Base, float]] = {base: 1/4 for base in DNA_BASES}
-UNIFORM_CONDITIONAL: Final[dict[Base, dict[Base, float]]] = {
+
+# Defaults for the conditional tables - every outcome equally likely
+UNIFORM_WEIGHTS: Final[dict[Base, NonNegativeFloat]] = {base: 1/4 for base in DNA_BASES}
+UNIFORM_CONDITIONAL: Final[dict[Base, dict[Base, NonNegativeFloat]]] = {
     base:
         {
             other_base: 1/3 for other_base in DNA_BASES if other_base != base
         }
         for base in DNA_BASES
     }
-DEFAULT_HOMOPOLYMER_MULTIPLIER: Final[dict[int, float]] = {4: 1.5, 5: 2.0, 6: 3.0}
-
-
-#------------------------------------------------------------------------------#
-#                                                                              #
-#   HELPER FUNCTION                                                            #
-#                                                                              #
-#------------------------------------------------------------------------------#
-
-
-def _check_sums_to_one(weights: dict[Base, float]) -> bool:
-    """
-    Checks a table of weights sums to 1. Negative weights are already caught by the field types.
-
-    Args:
-        weights: The weights to check.
-
-    Returns:
-        True if the weights sum to 1 (within floating point error), False otherwise.
-    """
-    sum_weights: float = 0.0
-    for _, weight in weights.items():
-        sum_weights += weight
-
-    # Need to use isclose because of floating point error
-    return math.isclose(sum_weights, 1)
-
-
-def _default_substitution_rate_per_base(data: dict[str, Any]) -> dict[Base, float]:
-    """
-    Default for substitution_rate_per_base, every base gets the overall substitution rate. Pydantic sees this takes one
-    argument and passes in the fields validated so far, so it has to be declared after substitution_rate in the config.
-
-    Args:
-        data: The fields pydantic has already validated, keyed by field name.
-
-    Returns:
-        A dictionary of each base to the overall substitution rate.
-    """
-    # Pydantic only calls this when the user gave no table at all, so the table isn't in data yet - every base gets the
-    #   sub rate. A partial table from the user never comes here, the validator fills its missing bases instead.
-    filled_values: dict[Base, float] = {}
-    for base in DNA_BASES:
-        filled_values[base] = data["substitution_rate"]
-
-    return filled_values
+DEFAULT_HOMOPOLYMER_MULTIPLIER: Final[dict[PositiveInt, NonNegativeFloat]] = {4: 1.5, 5: 2.0, 6: 3.0}
 
 
 
-@dataclass
 class GCWindow(BaseModel):
     """
     GC content bounds used to scale the error rate at each base. GC content between 40% and 60% is usually the safe
@@ -180,10 +135,10 @@ class GCWindow(BaseModel):
             The validated window.
 
         Raises:
-            ValidationError: If the lower bound is above the upper bound.
+            ValueError: If the lower bound is above the upper bound.
         """
         if self.lower_bound > self.upper_bound:
-            raise ValidationError(f"lower_bound must be <= upper_bound, got {self.lower_bound}, {self.upper_bound}")
+            raise ValueError(f"lower_bound must be <= upper_bound, got {self.lower_bound}, {self.upper_bound}")
 
         return self
 
@@ -213,7 +168,6 @@ class GCWindow(BaseModel):
 
 
 
-@dataclass
 class ErrorConfig(BaseModel):
     """
     The error settings shared by every stage. Each stage gets its own config, so the same settings can be used for
@@ -246,10 +200,10 @@ class ErrorConfig(BaseModel):
     #   mode if for any bases nothing is given.
     substitution_rate: Probability = 0.0015
 
-    # Chance each base gets substituted, e.g. {"A": 0.003254}. Defaults to substitution_rate for every base, see
-    #   _default_substitution_rate_per_base. If the user only gives some bases, the validator fills the missing ones.
-    substitution_rate_per_base: dict[Base, Probability] = Field(default_factory=_default_substitution_rate_per_base)
-    # Given a base is substituted, what it becomes - each row must sum to 1 and can't contain itself
+    # Chance each base gets substituted, e.g. {"A": 0.003254}
+    substitution_rate_per_base: dict[Base, Probability] = {}
+    # Given a base is substituted, what it becomes - each row must sum to 1 and can't contain itself. Uniform by
+    #   default, each other base equally likely.
     substitution_conditional: dict[Base, dict[Base, Probability]] = UNIFORM_CONDITIONAL
 
 
@@ -260,7 +214,7 @@ class ErrorConfig(BaseModel):
 
     # Chance of an insertion right after each base
     insertion_rate_after_base: dict[Base, Probability] = {}
-    # Given an insertion happens, which base gets inserted - must sum to 1
+    # Given an insertion happens, which base inserted - must sum to 1. Uniform by default, each base equally likely.
     insertion_conditional: dict[Base, Probability] = UNIFORM_WEIGHTS
     # Chance the inserted base just repeats the base before it (called stuttering), very common in homopolymers on
     #   nanopore. Will override insertion_conditional when happens.
@@ -280,7 +234,7 @@ class ErrorConfig(BaseModel):
     # Same as the other two rates, but for deletions. Used to fill in empties the per base table in advanced mode.
     deletion_rate: Probability = 0.001
 
-    # Chance each base gets deleted. Missing bases use deletion_rate.
+    # Chance each base gets deleted
     deletion_rate_per_base: dict[Base, Probability] = {}
 
     # Same min length plus geometric length as insertions, same (0, 1] range for p
@@ -333,7 +287,6 @@ class ErrorConfig(BaseModel):
     #--------------------------------------------------------------------------#
 
 
-
     # Ensure we validate everything to our standards and ensure we check after we change fields - just Guard Clauses.
     @model_validator(mode="after")
     def _check_rates(self) -> "ErrorConfig":
@@ -345,59 +298,129 @@ class ErrorConfig(BaseModel):
             The validated config, with every per base table filled in to all four bases.
 
         Raises:
-            ValidationError: If the three rates sum past 1 (overall or for one base), a min length is above its max 
+            ValueError: If the three rates sum past 1 (overall or for one base), a min length is above its max 
                 length, or a conditional row contains its own base, is missing a base, or doesn't sum to 1.
         """
+
+        # Perform gaurd clauses - valide rates > 1, min > max, and conditional tables complete, and sum = 1
+        self._validate_probabilities()
+        self._validate_lengths()
+        self._validate_rates()
+        self._validate_conditionals()
+
+        return self
+
+
+    def _validate_probabilities(self) -> None:
+        """
+        Checks the three rates sum to 1 or less, both overall and for each base. The field types already check they are
+        between 0 and 1, so we only need to check the sum.
+
+        Raises:
+            ValueError: If the three rates sum past 1 (overall or for one base).
+        """
+
         # Probabilities must sum to 1 or less
         if self.substitution_rate + self.insertion_rate + self.deletion_rate > 1:
-            raise ValidationError("Substitution, insertion, and deletion rates must sum to 1 or less.")
+            raise ValueError("Substitution, insertion, and deletion rates must sum to 1 or less.")
 
-        # Lengths start at the min, so the min can't be past the max
+
+    def _validate_lengths(self) -> None:
+        """
+        Checks the min lengths are at most the max lengths. The field types already check they are
+        positive, so we only need to check the min/max relationship.
+
+        Raises:
+            ValueError: If a min length is greater than its corresponding max length.
+        """
+         # Lengths start at the min, so the min can't be past the max
         if self.insertion_min_length > self.insertion_max_length:
-            raise ValidationError(f"insertion_min_length must be <= insertion_max_length, "
-                                  f"got {self.insertion_min_length}, {self.insertion_max_length}")
+            raise ValueError(f"insertion_min_length must be <= insertion_max_length, "
+                                f"got {self.insertion_min_length}, {self.insertion_max_length}")
         
         # Deletions with no max can run to the end of the strand, so only check when there is one
         if self.deletion_max_length is not None and self.deletion_min_length > self.deletion_max_length:
-            raise ValidationError(f"deletion_min_length must be <= deletion_max_length, "
-                                  f"got {self.deletion_min_length}, {self.deletion_max_length}")
+            raise ValueError(f"deletion_min_length must be <= deletion_max_length, "
+                                f"got {self.deletion_min_length}, {self.deletion_max_length}")
 
-        # Fill in any bases the user left out with the overall rate, so after this every table has all four bases
+
+    def _validate_rates(self) -> None:
+        """
+        Fills in any missing per base rates with 0's. This is so we can save/load configs without losing any 
+        information, and so we can use the config in advanced mode without the user having to fill in every base.
+
+        Raises:
+            ValueError: If the three rates for a base sum past 1.
+        """
+  
         for base in DNA_BASES:
-            self.substitution_rate_per_base.setdefault(base, self.substitution_rate)
-            self.insertion_rate_after_base.setdefault(base, self.insertion_rate)
-            self.deletion_rate_per_base.setdefault(base, self.deletion_rate)
+            # Fill in any missing per base rates with 0's 
+            if base not in self.substitution_rate_per_base:
+                self.substitution_rate_per_base[base] = 0
+            if base not in self.insertion_rate_after_base:
+                self.insertion_rate_after_base[base] = 0
+            if base not in self.deletion_rate_per_base:
+                self.deletion_rate_per_base[base] = 0
 
             # Same as the overall check, but per base - one base can't have more than a 100% chance of some error
             if (self.substitution_rate_per_base[base] +
                 self.insertion_rate_after_base[base] +
                 self.deletion_rate_per_base[base] > 1):
-                raise ValidationError(f"Substitution, insertion, and deletion rates for {base} must sum to 1 or less.")
+                raise ValueError(f"Substitution, insertion, and deletion rates for {base} must sum to 1 or less.")
 
-        # Check that the conditional rates are valid
-        if set(self.insertion_conditional) != set(DNA_BASES) or not _check_sums_to_one(self.insertion_conditional):
-            raise ValidationError(f"insertion_conditional must have every base and sum to one, "
-                                  f"got {set(self.insertion_conditional)}")
 
-        # The substitution conditional is a table, so it must have every base as a row
-        if set(self.substitution_conditional) != set(DNA_BASES):
-            raise ValidationError(f"substitution_conditional must have a row for each of {DNA_BASES}")
-        # But if it does, each row must have every base and sum to 1, and can't contain itself
-        for base, row in self.substitution_conditional.items():
-            # Cant be inside itself
+    def _validate_conditionals(self) -> None:
+        """
+        Checks the conditional tables are complete and each sums to 1. Nothing is filled in, the user has to give every
+        base. The insertion conditional needs all four bases, and the substitution conditional needs a row for every
+        base with all three other bases in it.
+
+        Raises:
+            ValueError: If a table is missing a base or row, a substitution row contains its own base, or a table
+                doesn't sum to 1.
+        """
+        insertion_total: float = 0.0
+
+        for base in DNA_BASES:
+            # INSERTION - given an insertion happens, which base is inserted. Needs every base.
+            if base not in self.insertion_conditional:
+                raise ValueError(f"insertion_conditional is missing {base}, every base must be given")
+            insertion_total += self.insertion_conditional[base]
+
+
+            # SUBSTITUTION - given a base is substituted, what it becomes. Every base needs its own row.
+            if base not in self.substitution_conditional:
+                raise ValueError(f"substitution_conditional is missing the row for {base}")
+
+            # Get the conditional row for this base
+            row: dict[Base, float] = self.substitution_conditional[base]
+
+            # A base can't be substituted with itself
             if base in row:
-                raise ValidationError(f"substitution_conditional row {base} can't contain itself, got {set(row)}")
+                raise ValueError(f"substitution_conditional {base} can't contain {base}, a base can't become itself")
 
-            # Must have every base besides itself and sum to 1
-            if (set(row) != set(DNA_BASES) - {base}) or not _check_sums_to_one(row):
-                raise ValidationError(f"substitution_conditional row {base} must have every base "
-                                      f"and sum to one, got {set(row)}")
+            # Needs every other base, adding them up as we go
+            row_total: float = 0.0
+            for other_base in DNA_BASES:
+                if other_base == base:
+                    continue
+                if other_base not in row:
+                    raise ValueError(f"substitution_conditional row {base} is missing {other_base}, every other base "
+                                     f"must be given")
 
-        return self
+                # Add up the row to check it sums to 1
+                row_total += row[other_base]
+
+            # The base has to become one of the others, so the row must sum to 1 (isclose for floating point error)
+            if not math.isclose(row_total, 1):
+                raise ValueError(f"substitution_conditional row {base} must sum to 1, got {round(row_total, 6)}")
+
+        # One of the bases has to be inserted, so it must sum to 1 - only known once every base has been added up
+        if not math.isclose(insertion_total, 1):
+            raise ValueError(f"insertion_conditional must sum to 1, got {round(insertion_total, 6)}")
 
 
 
-@dataclass
 class SynthesisConfig(ErrorConfig):
     """
     Synthesis writes each strand base by base, and makes many copies of each one. Most insertions and deletions come
@@ -420,7 +443,6 @@ class SynthesisConfig(ErrorConfig):
 
 
 
-@dataclass
 class AgingConfig(ErrorConfig):
     """
     Aging is the strands sitting in storage. DNA mostly decays by depurination (molecule falls off and strand break),
@@ -443,7 +465,6 @@ class AgingConfig(ErrorConfig):
 
 
 
-@dataclass
 class PCRConfig(ErrorConfig):
     """
     PCR copies every strand each cycle. The rates here are per base per copy, and only hit the new copies made each
@@ -473,7 +494,6 @@ class PCRConfig(ErrorConfig):
 
 
 
-@dataclass
 class SequencingConfig(ErrorConfig):
     """
     Sequencing reads strands from the pool. Errors depend a lot on the platform - but we shall leave that up to the
