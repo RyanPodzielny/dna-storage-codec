@@ -186,3 +186,14 @@ class NotInRegistryError(Error):
                  component_name: str):
         self.component_name: str = component_name
         super().__init__(f"{message}: {component_name} is not registered in the registry.")
+
+
+
+class SimulatorError(Error):
+    """
+    Error raised when an error occurs during simulation.
+    """
+    def __init__(self, 
+                 *,
+                 message: str = "Simulation error occurred"):
+        super().__init__(message=f"{message}: An error occurred during the simulation process.")

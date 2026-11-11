@@ -13,8 +13,8 @@ from the file alone.
 from pathlib import Path
 from typing import Literal
 from pydantic import BaseModel, ConfigDict
-from pydantic.dataclasses import dataclass
-from Simulate.ErrorSimulator import AgingConfig, PCRConfig, SequencingConfig, SynthesisConfig
+from Simulate.ErrorConfig import AgingConfig, PCRConfig, SequencingConfig, Stage, SynthesisConfig
+from Simulate.ErrorSimulator import ErrorDictKeys, ErrorRecord, ErrorType
 
 
 #------------------------------------------------------------------------------#
@@ -33,6 +33,7 @@ class SavedStage(BaseModel):
     A single stage's config, the whole file saved by save_stage.
     """
 
+    # No extra fields allowed, e.g. PCR config saved under synthesis is rejected when loading
     model_config = ConfigDict(extra="forbid")
 
     # Ensure we are reading a file saved with the same version. Bump the number here if the format changes.
@@ -59,6 +60,22 @@ class SavedSimulation(BaseModel):
     aging: AgingConfig
     pcr: PCRConfig
     sequencing: SequencingConfig
+
+
+
+class SavedErrors(BaseModel):
+    """
+    Every error from a simulation, the whole file saved by save_errors. Only made for the user to look at, so it is
+    never loaded back.
+    """
+
+    # Don't allow for extra fields
+    model_config = ConfigDict(extra="forbid")
+
+    # How many of each error happened, then every error in the order they happened. Each error is the dict the error
+    #   record already makes (index, position, stage, error type, and the strand after the error)
+    counts: dict[ErrorType, int]
+    records: list[dict[str, (int | None) | Stage | ErrorType | str]]
 
 
 
@@ -195,3 +212,36 @@ class ErrorConfigSerializer:
         saved: SavedSimulation = SavedSimulation.model_validate_json(json_content)
 
         return saved
+
+
+    @staticmethod
+    def save_errors(record: ErrorRecord, json_path: str, include_sequences: bool = True) -> None:
+        """
+        Saves an error record to a JSON file for the user to look at - the count of each error type, then every error
+        that happened (index of the strand, position, stage, error type, and the strand after the error). Using a JSON
+        makes it easier to read and analyze later than just a simple text file.
+
+        Args:
+            record: The error record to save, e.g. simulator.error_record after a simulation.
+            json_path: The path to the output JSON file. Parent directories are created if needed.
+            include_sequences: If we want to save the strand after every error. Each one is a whole strand, so
+                leaving them out makes the file a lot smaller.
+
+        Raises:
+            FileNotFoundError: If the output path is invalid or cannot be created.
+        """
+
+        # Records are already dicts, so they can go in as they are
+        records: list[dict[str, (int | None) | Stage | ErrorType | str]] = record.records
+
+        # Strands take up most of the file, so leave them out of every record if we don't want them
+        if not include_sequences:
+            records = []
+            for error in record.records:
+                without_sequence: dict[str, (int | None) | Stage | ErrorType | str] = dict(error)
+                del without_sequence[ErrorDictKeys.SEQUENCE]
+                records.append(without_sequence)
+
+        # A run with no errors is still a result, so this saves an empty list rather than complaining
+        save: SavedErrors = SavedErrors(counts=record.counts, records=records)
+        ErrorConfigSerializer._write_json(save, json_path)

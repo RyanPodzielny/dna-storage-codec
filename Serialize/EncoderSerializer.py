@@ -282,8 +282,9 @@ class Serializer:
     UNSAVED_FIELDS: Final[tuple[str, ...]] = ("in_path", "overhead_margin")
 
     # The indexer's width isn't a constructor argument in its spec, so it is saved next to the config's settings
-    INDEX_WIDTH: Final[str] = "index_width"
-
+    INDEX_LENGTH: Final[str] = "index_length"
+    # The name of the width argument in an indexer's spec
+    WIDTH: Final[str] = "width"  
 
     #--------------------------------------------------------------------------#
     #                                                                          #
@@ -341,14 +342,15 @@ class Serializer:
         # Everything that isn't a component or only used for encoding is already plain JSON
         saved: dict[str, Any] = config.model_dump(exclude=exclude_fields)
 
+        # Index width is part of the Indexer's class rather than the config - want to save next to payload length
+        saved[Serializer.INDEX_LENGTH] = config.indexer.width
+
         # Components are objects, save them as specs - None if no inner or outer code was used
         for name in Serializer.COMPONENT_FIELDS:
             component: Component = getattr(config, name)
             # Example save: {component_name: {"type": class_name, "args": {arg_name: value, ...}}} or None
             saved[name] = Registry.to_spec(component) if component else None
 
-        saved[Serializer.INDEX_WIDTH] = config.indexer.width
-        
         return saved
 
 
@@ -375,8 +377,12 @@ class Serializer:
             KeyError: If the index width is missing, or a component spec is missing its type or arguments.
             TypeError: If a component spec's arguments don't match its constructor.
         """
+        # Kinda jank but gets the job done
+        IN_PATH: Final[str] = "in_path"
+        INDEXER: Final[str] = "indexer"
+
         # The in path isn't saved, it is the file we just loaded
-        settings: dict[str, Any] = {"in_path": in_path}
+        settings: dict[str, Any] = {IN_PATH: in_path}
 
         # FramerConfig.model_fields is every field name on the config (oligo_length, encoder, num_oligos, ...)
         for name in FramerConfig.model_fields:
@@ -391,17 +397,17 @@ class Serializer:
             if name in Serializer.COMPONENT_FIELDS and value is not None:
                 # The indexer's width isn't part of its spec, it was saved next to the settings, so give it back here
                 extra_args: dict[str, Any] = {}
-                if name == "indexer":
-                    extra_args[Serializer.INDEX_WIDTH] = data[Serializer.INDEX_WIDTH]
+                if name == INDEXER:
+                    extra_args[Serializer.WIDTH] = data[Serializer.INDEX_LENGTH]
 
+                # Get the spec from the registry with unpacking any extra args
                 value = Registry.from_spec(value, **extra_args)
 
             # Everything else was saved as is, so it goes straight in
             settings[name] = value
 
-        # Same as FramerConfig(in_path=..., oligo_length=..., ...) with every setting we found - checks all of them. 
-        #   Unpakc with dict expansion so don't need to name each one. We already validated the components
-        return FramerConfig(**settings)
+        # Build the config from every setting we found; this also checks them all.
+        return FramerConfig.model_validate(settings)
 
 
     #--------------------------------------------------------------------------#

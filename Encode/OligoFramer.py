@@ -243,7 +243,7 @@ class OligoFramer(OligoFormat):
         #   width left after accounting for primers, index, checksum, inner/outer(filling)correction
         self._set_payload_length()
 
-        # Filled in by frame_all_oligos, saved so the deframer can decode
+        # Filled in by frame_all_oligos, saved so the deframer can decode (content length is character length)
         self.content_length: int = 0
         self.content_hash: str = ""
         self.huffman_codes: dict[str, str] = {}     # Note: standard DNA mapping just is the dict for the map
