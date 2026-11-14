@@ -19,7 +19,7 @@ from typing import cast
 import numpy as np
 
 from Encode.Methods.Encoding import Base
-from Helpers.Errors import SimulatorError
+from Helpers.Errors import SimulationError
 from Simulate.ErrorConfig import DNA_BASES, CoverageDistribution, GCWindow, Stage, ErrorConfig, SynthesisConfig, \
     AgingConfig, PCRConfig, SequencingConfig
 
@@ -222,7 +222,7 @@ class ErrorSimulator:
         for count, index, sequence in zip(counts, indices, sequences):
             # Shouldn't happen, but just in case
             if count < 0:
-                raise SimulatorError(
+                raise SimulationError(
                     message=f"Count for strand {index} is {count}, must be above 0 to repeat it"
                 )
             
@@ -259,7 +259,7 @@ class ErrorSimulator:
         """
         # In case something silly happens (shouldn't get based typing) (also mean will always be validated by pydantic)
         if distribution not in CoverageDistribution or distribution == CoverageDistribution.UNKNOWN:
-            raise SimulatorError(
+            raise SimulationError(
                 message=f"Distribution {distribution} is not a valid coverage distribution"
             )
 
@@ -465,7 +465,7 @@ class ErrorSimulator:
                 - The strands coming out of the stage, dropped strands are removed.
         """
         if config.stage != Stage.AGING:
-            raise SimulatorError(
+            raise SimulationError(
                 message=f"Stage {config.stage} is not aging, cannot apply aging errors"
             )
 
@@ -1080,7 +1080,7 @@ class ErrorSimulator:
             SimulatorError: If the stage has no truncation rate, so it can't apply truncation
         """
         if config.truncation_rate <= 0:
-            raise SimulatorError(
+            raise SimulationError(
                 message=f"Stage {config.stage} has no truncation rate, cannot apply truncation"
             )
 
@@ -1219,7 +1219,13 @@ class ErrorSimulator:
             indices.append(index)
 
         for _, config in self.stages:
+            # Apply our errors
             indices, sequences = self._apply_stage(indices, sequences, config)
 
-        # Only the strands are returned, the indices were just for the records
+            # Shuffle everything up after each stage. Shuffle one order and apply it to both, so the indices stay lock
+            #   step with the strands and every error is still recorded against the right original strand
+            order: np.ndarray = self.generators[config.stage].permutation(len(sequences))
+            indices = [indices[position] for position in order]
+            sequences = [sequences[position] for position in order]
+
         return sequences

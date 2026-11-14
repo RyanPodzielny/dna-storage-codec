@@ -581,7 +581,7 @@ class SequencingConfig(ErrorConfig):
 
 
     # Mean number of reads per unique strand - same as synthesis
-    read_depth: PositiveInt = 5                 # INCLUDED IN SIMPLE MODE
+    read_depth: PositiveInt = 3                 # INCLUDED IN SIMPLE MODE
 
     # Same as synthesis, but for reads
     read_distribution: CoverageDistribution = CoverageDistribution.FIXED
