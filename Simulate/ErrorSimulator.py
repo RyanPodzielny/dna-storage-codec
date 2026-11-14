@@ -155,7 +155,12 @@ class ErrorSimulator:
             self.generators[stage] = np.random.default_rng(config.seed)
 
         # Error record created on simulate, which will hold the counts and records of every error that happens
-        self.error_record: ErrorRecord 
+        self.error_record: ErrorRecord
+
+        # Rates already worked out for a strand in the current stage, so exact copies of a strand (synthesis copies,
+        #   PCR copies, reads) don't work them out again. Cleared at the start of every stage (see _apply_stage). Speeds
+        #   up advanced mode a lot, since the conditional tables are slow to work out and we can just look them up.
+        self.rate_cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
 
     #--------------------------------------------------------------------------#
@@ -227,9 +232,8 @@ class ErrorSimulator:
                 )
             
             # Add the strand to the output as many times as its count says
-            for _ in range(count):
-                output_indices.append(index)
-                output.append(sequence)
+            output_indices.extend([index] * count)
+            output.extend([sequence] * count)
 
         return output_indices, output
 
@@ -614,6 +618,9 @@ class ErrorSimulator:
                 - The strands coming out of the stage, dropped strands are removed.
         """
 
+        # Rates depend on the stage's config, so every stage starts with an empty cache
+        self.rate_cache = {}
+
         # DROPOUT - every stage loses whole strands first, so we don't waste time adding errors to strands we are going
         #   to drop anyways. Aging is the odd one out, it works out its own dropout from the years (see _age_strands)
         if config.stage != Stage.AGING:
@@ -861,14 +868,16 @@ class ErrorSimulator:
 
         # How long the run we are currently in is
         run_length: int = 0
-        for position in range(len(sequence)):
+        previous_letter: str = ""
+        for letter in sequence:
             # Same base as the one before it, so the run keeps going - otherwise a new run starts at this base
-            if position > 0 and sequence[position] == sequence[position - 1]:
+            if letter == previous_letter:
                 run_length += 1
             else:
                 run_length = 1
 
             run_lengths.append(run_length)
+            previous_letter = letter
 
         # Return as an array, so it can be used to look up the multiplier for every base at once
         return np.array(run_lengths)
@@ -925,35 +934,6 @@ class ErrorSimulator:
         return by_length[run_lengths]
 
 
-    def _get_homopolymer_survival(self, sequence: str, config: ErrorConfig) -> float:
-        """
-        Gets the chance a strand survives its longest homopolymer. Long runs can lose the whole strand (synthesis fails
-        on it, PCR stalls, the sequencer loses the cluster). Every base of the longest run from the config's dropout
-        length on is another chance of losing it, e.g. a run of 9 with a dropout length of 7 is 3 bases.
-
-        Args:
-            sequence: The strand to look at.
-            config: The config of the stage.
-
-        Returns:
-            The chance the strand survives, 1 if it has no run long enough (or we aren't using advanced homopolymers).
-        """
-        # Advanced only, and only if we are looking at homopolymers at all
-        if not config.advanced_mode or not config.homopolymer_check or not sequence:
-            return 1.0
-
-        # How many bases of the longest run are at or past the dropout length
-        longest_run: int = int(self._get_run_lengths(sequence).max())
-        bases_past: int = longest_run - config.homopolymer_dropout_length + 1
-
-        # No run is long enough to lose the strand
-        if bases_past <= 0:
-            return 1.0
-
-        # Every one of those bases is another chance of losing the strand, so it has to survive all of them
-        return (1 - config.homopolymer_dropout_rate) ** bases_past
-
-
     @staticmethod
     def _get_gc_multipliers(sequence: str, gc_window: GCWindow) -> np.ndarray:
         """
@@ -994,6 +974,35 @@ class ErrorSimulator:
         multipliers: np.ndarray = np.array(gc_window.multiplier(np.array(gc_fractions)))
 
         return multipliers
+
+
+    def _get_homopolymer_survival(self, sequence: str, config: ErrorConfig) -> float:
+        """
+        Gets the chance a strand survives its longest homopolymer. Long runs can lose the whole strand (synthesis fails
+        on it, PCR stalls, the sequencer loses the cluster). Every base of the longest run from the config's dropout
+        length on is another chance of losing it, e.g. a run of 9 with a dropout length of 7 is 3 bases.
+
+        Args:
+            sequence: The strand to look at.
+            config: The config of the stage.
+
+        Returns:
+            The chance the strand survives, 1 if it has no run long enough (or we aren't using advanced homopolymers).
+        """
+        # Advanced only, and only if we are looking at homopolymers at all
+        if not config.advanced_mode or not config.homopolymer_check or not sequence:
+            return 1.0
+
+        # How many bases of the longest run are at or past the dropout length
+        longest_run: int = int(self._get_run_lengths(sequence).max())
+        bases_past: int = longest_run - config.homopolymer_dropout_length + 1
+
+        # No run is long enough to lose the strand
+        if bases_past <= 0:
+            return 1.0
+
+        # Every one of those bases is another chance of losing the strand, so it has to survive all of them
+        return (1 - config.homopolymer_dropout_rate) ** bases_past
 
 
     def _get_advanced_error_rates(self, 
@@ -1151,8 +1160,14 @@ class ErrorSimulator:
         if not sequence:
             return sequence
 
-        # Rates are worked out on the strand as it is now, before any of the errors below change it
-        rates: tuple[np.ndarray, np.ndarray, np.ndarray] = self._get_advanced_error_rates(sequence, config)
+        # Get the rates for every base in the strand, and cache them so we don't have to do it again if we see the same
+        #   strand again (like in sequencing where every original strand gets read multiple times). The rates are just
+        #   the chance of an error happening on that base, not that error actually occurs. So errors should still be
+        #   different every time we see the same strand in the cache. This speedup is huge, since we are often looking
+        #   at the same strand hundreds of times in sequencing.
+        if sequence not in self.rate_cache:
+            self.rate_cache[sequence] = self._get_advanced_error_rates(sequence, config)
+        rates: tuple[np.ndarray, np.ndarray, np.ndarray] = self.rate_cache[sequence]
 
         # Same as simple mode, each rate is added onto the last so the same roll can be used for all three
         substitution_rates: np.ndarray = rates[0]
