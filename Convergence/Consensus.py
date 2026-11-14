@@ -4,15 +4,17 @@ strand per index instead of a pile of noisy copies. Every consensus algorithm ta
 back a single strand, so it can be swapped out for any other, and paired with any clusterer. Like clustering, consensus 
 knows nothing about encoding - it only ever sees strings of bases.
 
-Based on partial order alignment (POA) from the spoa library which is a C++ verison to speed things up. N
+Based on partial order alignment (POA) from the spoa library which is a C++ verison to speed things up. Basically a 
+its based on these papers - 2002 is origin and 2017 is what made it fast:
+    (2002): Lee, C. et al. "Multiple sequence alignment using partial order graphs"
+    (2017): Vaser, Sović, Nagarajan, Šikić "Fast and accurate de novo genome assembly from long uncorrected reads".
 """
 
-# spoa is a C++ library for partial order alignment (POA), with SIMD to speed up the alignment.
-#   Vaser, Sović, Nagarajan, Šikić (2017) "Fast and accurate de novo genome assembly from long uncorrected reads".
 from spoa import poa
 
 from Convergence.Clustering import Clustering
 from Helpers.Errors import ConsensusError
+
 
 
 class Consensus:
