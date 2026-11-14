@@ -888,7 +888,8 @@ class OligoDeframer(OligoFormat):
     def unframe_all_oligos(self, framed_oligos: list[str]) -> Generator[tuple[str, str, str, str]]:
         """
         Unframes all oligos, extracting the index and payload sequences for each. Done as a generator as some oligos
-        may not be the expected length and we want to yield empty strings for those instead of raising an error.
+        may not be the expected length (or have bases we can't decode) and we want to yield empty strings for those
+        instead of raising an error.
 
         Args:
             framed_oligos: A list of fully framed oligos as strings.
@@ -904,6 +905,14 @@ class OligoDeframer(OligoFormat):
 
         # Go through each framed oligo and unframe it, yielding the results
         for framed_oligo in framed_oligos:
+            # Real reads can come in lowercase, which is still the same base
+            framed_oligo = framed_oligo.upper()
+
+            # Must be a valid DNA nucleotide
+            if not set(framed_oligo) <= Encoding.DNA_BASES:
+                yield ("", "", "", "")
+                continue
+
             try:
                 yield self.unframe_oligo(framed_oligo, expected_length)
             # Yield empty strings for any oligo that does not match the expected length, as we can't unframe it

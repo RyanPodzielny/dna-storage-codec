@@ -1074,15 +1074,12 @@ class ErrorSimulator:
             config: The config of the stage.
 
         Returns:
-            The strand after the truncation. Can be empty if the strand was cut down to nothing
-        
-        Raises:
-            SimulatorError: If the stage has no truncation rate, so it can't apply truncation
+            The strand after the truncation. Can be empty if the strand was cut down to nothing. Unchanged if the
+            stage has no truncation rate.
         """
+        # A rate of 0 just means no truncation in this stage. Numpy's geometric needs a p above 0, so skip the draw
         if config.truncation_rate <= 0:
-            raise SimulationError(
-                message=f"Stage {config.stage} has no truncation rate, cannot apply truncation"
-            )
+            return sequence
 
         # Same draw as an insertion/deletion length, just starting at 0 with no cap
         kept_length: int = self._draw_length(rng, 0, config.truncation_rate, None)
@@ -1115,7 +1112,7 @@ class ErrorSimulator:
 
         # TRUNCATION - every base has the same chance of being where the strand is cut, so the number of bases until
         #   the cut is geometric. This gives us P(strand intact) = (1 - rate)^length. Everything past the cut is gone.
-        self._apply_truncation_errors(rng, index, sequence, config)
+        sequence = self._apply_truncation_errors(rng, index, sequence, config)
 
         # Nothing left to add errors to if truncation shot and killed it (found dead in the Bronx)
         if not sequence:

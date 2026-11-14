@@ -134,8 +134,11 @@ class Clustering:
             k=max_errors            # Not allow more than the allowed errors, otherwise it stops early
         )
 
-        # If primer can't be found within allowed errors, return as None so we just cut off length instead
-        if result["editDistance"] == -1:
+        # If primer can't be found within allowed errors, return as None so we just cut off length instead. edlib
+        #   doesn't always respect k - on an empty window (a read too short to reach this end) it gives back the full
+        #   edit distance with a location of (None, -1) instead of -1, so check all of them
+        distance: int = result["editDistance"]
+        if distance == -1 or distance > max_errors or not result["locations"] or result["locations"][0][0] is None:
             return None
 
         # edlib gives the end as inclusive, so add one. Might have multiple best spots, first is good enough
@@ -317,9 +320,10 @@ class Clustering:
 
     def _get_identity(self, body: str, centroid: str) -> float:
         """
-        Gets the identity of a read to a centroid the same way VSEARCH does by default: the matching bases over the 
-        number of columns in the alignment, not counting the gaps hanging off either end. So a read that was cut short 
-        only gets scored on the part it has.
+        Gets the identity of a read to a centroid like VSEARCH does by default: the matching bases over the number of
+        columns in the alignment, not counting the gaps hanging off either end. So a read that was cut short (at the
+        start, the end, or both) only gets scored on the part it has. Only the extra length of the longer one is free
+        though, so two strands of the same length that are just shifted copies of each other don't look identical.
 
         Args:
             body: The read, without its primers.
@@ -328,17 +332,25 @@ class Clustering:
         Returns:
             The identity between 0 and 1, 0 if it is for sure below the threshold (edlib stopped early).
         """
-        # The most edits we could have and still be at the threshold. Identity is matches over columns, and there are
-        #   at most as many columns as both reads put together. On top of that, the gaps hanging off the ends count as
-        #   edits for edlib but not for identity, and there are at least as many of those as the difference in length.
-        #   So this is a safe place for edlib to stop early
+        # The most edits we could have and still be at the threshold. Identity is matches over columns, every edit is a
+        #   column that isn't a match, and there are at most as many columns as both reads put together. So this is a
+        #   safe place for edlib to stop early (it is loose, but never stops on one that could reach the threshold)
         max_edits: int = math.floor((1 - self.config.identity) * (len(body) + len(centroid))) + \
             abs(len(body) - len(centroid))
 
+        # The gaps hanging off the ends have to be free in the alignment itself, not just dropped afterwards. With a
+        #   global alignment, a read missing its first bases can have those gaps placed anywhere near the start for the
+        #   same cost (e.g. "2=1D1=4D1=17D..."), so they end up in the middle and get counted. Instead the shorter one is
+        #   aligned inside the longer one (infix), where skipping the start or end of the longer one is free
+        shorter: str = body
+        longer: str = centroid
+        if len(body) > len(centroid):
+            shorter, longer = centroid, body
+
         result: dict = edlib.align(
-            query=body,             # The read
-            target=centroid,        # The centroid
-            mode="NW",              # Global (Needleman-Wunsch), both reads are aligned end to end
+            query=shorter,          # The shorter of the read and centroid, aligned end to end
+            target=longer,          # The longer one, its start and end can be skipped for free
+            mode="HW",              # Infix, the query can sit anywhere in the target for free
             task="path",            # Need the alignment itself (the CIGAR) to count matches and columns
             k=max_edits             # Stop as soon as there are too many edits to ever reach the threshold
         )
@@ -347,22 +359,16 @@ class Clustering:
         if result["editDistance"] == -1:
             return 0.0
 
-        # Get our alignment as a list of operations, e.g. [(3, "="), (1, "X"), (2, "="), (1, "D")] for "3=1X2=1D"
+        # Get our alignment as a list of operations, e.g. [(3, "="), (1, "X"), (2, "="), (1, "D")] for "3=1X2=1D". The
+        #   skipped start and end of the longer one aren't in it, so those gaps are already left out
         operations: list[tuple[int, str]] = self._parse_cigar(result["cigar"])
 
-        # Drop the gaps hanging off either end (insertions or deletions at the very start or end of the alignment)
-        start: int = 0
-        end: int = len(operations)
-        while start < end and operations[start][1] in ("I", "D"):
-            start += 1
-        while end > start and operations[end - 1][1] in ("I", "D"):
-            end -= 1
-
-        # Matches over every column that is left. Our columns are the matches, mismatches, and the insertions and 
-        #   deletions in the middle of the alignment
+        # Matches over every column. Our columns are the matches, mismatches, insertions, and deletions. Gaps at the
+        #   ends of the shorter one are NOT dropped - otherwise a copy shifted by a few bases (repeated content in the
+        #   file) would skip the shift on both sides and score a perfect match against a different strand
         matches: int = 0
         columns: int = 0
-        for count, operation in operations[start:end]:
+        for count, operation in operations:
             columns += count
 
             # We only count matches, not mismatches or gaps, for the our identity

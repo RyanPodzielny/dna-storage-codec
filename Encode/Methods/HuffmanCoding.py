@@ -726,7 +726,12 @@ class BitScanQuaternary(Quaternary):
         """
         total_code_length: int = sum(len(code) for code in huffman_codes.values())
         average_code_length: float = total_code_length / len(huffman_codes)
-        
+
+        # A tree with a single leaf (the data is one symbol repeated, e.g. "aaaa") gives that symbol an empty code. That
+        #   table can't encode anything, so give it no density instead of dividing by zero - it is never the best k
+        if average_code_length == 0:
+            return 0.0
+
         coding_density: float = self.K / average_code_length
         return coding_density
 
@@ -815,7 +820,10 @@ class BitScanQuaternary(Quaternary):
         return ascii_segments
 
 
-    def find_optimal_k(self, in_path: str, min_k: int = 4, max_k: int = 52) -> tuple[int, float, dict[str, str], str]:
+    def find_and_set_optimal_k(self, 
+                               in_path: str, 
+                               min_k: int = 4, 
+                               max_k: int = 52) -> tuple[int, float, dict[str, str], str]:
         """
         Finds the optimal value of k that maximizes the coding density for the given data, and sets the class's K 
         attribute to that value.
@@ -823,7 +831,7 @@ class BitScanQuaternary(Quaternary):
         Args:
             in_path: The path to the input file.
             min_k: The minimum value of k to consider. Default is 4.
-            max_k: The maximum value of k to consider. Default is 16.
+            max_k: The maximum value of k to consider. Default is 52.
 
         Returns:
             A tuple containing the optimal value of k, the maximum coding density, the best Huffman codes, and the 
@@ -837,8 +845,16 @@ class BitScanQuaternary(Quaternary):
         with open(in_path, 'r', encoding='utf-8') as f:
             data: str = f.read()
 
+        # Scan k bits at a time, the same as encode_segments does - otherwise k would be k characters here but k bits
+        #   when actually encoding, and the k we pick wouldn't mean anything for the real encoding
+        data = Encoding.ascii_to_binary(data)
+
         optimal_k: int = min_k
         max_density: float = 0.0
+
+        # Kept empty if no k gives any density (every table was a single empty code), so min_k is returned
+        best_huffman_codes: dict[str, str] = {}
+        best_encoded_data: str = ""
 
         if min_k > max_k:
             raise ValueError("min_k cannot be greater than max_k.")
@@ -848,11 +864,15 @@ class BitScanQuaternary(Quaternary):
             huffman_codes, encoded_data = self.encode(data)
             density: float = self._calculate_coding_density(huffman_codes)
 
+            # If the density is greater than the max density, update the optimal k and max density
             if density > max_density:
                 max_density = density
                 optimal_k = k
                 best_huffman_codes = huffman_codes
                 best_encoded_data = encoded_data
+
+        # The loop leaves K at the last k tried, so set it to the one we found
+        self.K = optimal_k
 
         return optimal_k, max_density, best_huffman_codes, best_encoded_data
 

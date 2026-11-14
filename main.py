@@ -102,7 +102,7 @@ def get_encoders(origin: str) -> list[Encoding]:
     Returns:
         A list of encoders to test.
     """
-    optimal_k: int = BitScanQuaternary().find_optimal_k(origin)[0]
+    optimal_k: int = BitScanQuaternary().find_and_set_optimal_k(origin)[0]
 
     # All the encoders we have (besides standard huffman)
     return [

@@ -1010,7 +1010,11 @@ class XOR(OuterCodes):
             MistmatchSegments: If previous_sequences and encoded_sequences are not the same length.
         """
         self._validate_segments(previous_sequences, encoded_sequences)
-        self._retrieve_payload_length(encoded_sequences)
+
+        # Every strand being erased isn't an error - nothing can be recovered, so every payload strand stays None (the
+        #   blocks below handle that). Only check the payload length when there is a strand to check it on
+        if any(sequence is not None for sequence in encoded_sequences):
+            self._retrieve_payload_length(encoded_sequences)
 
         # Must be same length in this scenario
         if len(previous_sequences) != len(encoded_sequences):
@@ -1713,16 +1717,22 @@ class RSOuter(OuterCodes):
 
             erasure_mask: list[bool] = self._get_erasure_mask(payload_block)
 
-            # Get the columns for this block, which is a all the GF symbols
-            columns: list[list[galois.FieldArray]] = self._retrieve_columns(
-                previous_segments=previous_block, 
-                payload_segments=payload_block,
-                error_on_none=False
-            )
-
             # Our last block may not be full. The block here holds payload + parity, so recover how many are payload
             #   the same way add_redundancy sized it, and use the matching shortened RS code
             data_count: int = self._payload_for_block(len(payload_block))
+
+            # Every strand in the block was lost, so there is nothing to build the columns from (or to correct with).
+            #   The block's payload strands are lost, but the other blocks can still be corrected
+            if all(erasure_mask):
+                corrected_sequences.extend([None] * data_count)
+                continue
+
+            # Get the columns for this block, which is a all the GF symbols
+            columns: list[list[galois.FieldArray]] = self._retrieve_columns(
+                previous_segments=previous_block,
+                payload_segments=payload_block,
+                error_on_none=False
+            )
             parity_per_block: int = len(payload_block) - data_count
             rs: galois.ReedSolomon = self._get_rs(data_count, parity_per_block)
             
@@ -1753,7 +1763,6 @@ class RSOuter(OuterCodes):
                         output="message",
                         errors=True
                     )
-
                     # Galois reports an undecodable column with errors == -1. Goldman decoding is stateful across
                     #   columns, so no later column can make a complete DNA strand valid after this point
                     if isinstance(errors, int) and errors == -1:
@@ -1764,9 +1773,8 @@ class RSOuter(OuterCodes):
                 #   strand. The last strand may not be uniform with the data capacity.
                 for payload_index in range(data_count):
                     # Get our previous base for this strand
-                    if column_index == 0:
-                        previous_base: str = previous_block[payload_index][-1]
-                    else:
+                    previous_base: str = previous_block[payload_index][-1]
+                    if column_index != 0:
                         previous_base: str = corrected_block[payload_index][column_index * RSOuter.COLUMN_LENGTH - 1]
 
                     # Convert corrected symbol back to DNA bases
