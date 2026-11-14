@@ -328,7 +328,8 @@ class ErrorSimulator:
                               survival_chance: float = 1.0) -> tuple[list[int], list[str]]:
         """
         Drops whole strands. Every strand has the dropout rate, and a stage can add its own chance of the strand
-        surviving on top of it (advanced aging uses this for decay). Happens basically at every stage, we do this
+        surviving on top of it (advanced aging uses this for decay). In advanced mode a strand with a long homopolymer
+        can also be lost (see _get_homopolymer_survival). Happens basically at every stage, we do this
         before each stage does it own this so we can kinda cheat and not be forced to put errors on to strands we
         are then planning to delete.
 
@@ -355,8 +356,11 @@ class ErrorSimulator:
         output: list[str] = []
         # Go through each strand to see if it survives (so we can record errors for the ones that don't)
         for roll, index, sequence in zip(rolls, indices, sequences):
+            # A long homopolymer can also lose the strand, on top of the stage's own chance (advanced only)
+            strand_keep_chance: float = keep_chance * self._get_homopolymer_survival(sequence, config)
+
             # Whole strand is lost, bye bye
-            if roll >= keep_chance:
+            if roll >= strand_keep_chance:
                 self.error_record.record_error(index, None, config.stage, ErrorType.DROPOUT, sequence)
                 continue
 
@@ -919,6 +923,35 @@ class ErrorSimulator:
             by_length[length] = ErrorSimulator._get_homopolymer_multiplier(length, multipliers)
 
         return by_length[run_lengths]
+
+
+    def _get_homopolymer_survival(self, sequence: str, config: ErrorConfig) -> float:
+        """
+        Gets the chance a strand survives its longest homopolymer. Long runs can lose the whole strand (synthesis fails
+        on it, PCR stalls, the sequencer loses the cluster). Every base of the longest run from the config's dropout
+        length on is another chance of losing it, e.g. a run of 9 with a dropout length of 7 is 3 bases.
+
+        Args:
+            sequence: The strand to look at.
+            config: The config of the stage.
+
+        Returns:
+            The chance the strand survives, 1 if it has no run long enough (or we aren't using advanced homopolymers).
+        """
+        # Advanced only, and only if we are looking at homopolymers at all
+        if not config.advanced_mode or not config.homopolymer_check or not sequence:
+            return 1.0
+
+        # How many bases of the longest run are at or past the dropout length
+        longest_run: int = int(self._get_run_lengths(sequence).max())
+        bases_past: int = longest_run - config.homopolymer_dropout_length + 1
+
+        # No run is long enough to lose the strand
+        if bases_past <= 0:
+            return 1.0
+
+        # Every one of those bases is another chance of losing the strand, so it has to survive all of them
+        return (1 - config.homopolymer_dropout_rate) ** bases_past
 
 
     @staticmethod

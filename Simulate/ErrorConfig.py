@@ -92,7 +92,7 @@ UNIFORM_CONDITIONAL: Final[dict[Base, dict[Base, NonNegativeFloat]]] = {
         }
         for base in DNA_BASES
     }
-DEFAULT_HOMOPOLYMER_MULTIPLIER: Final[dict[PositiveInt, NonNegativeFloat]] = {4: 1.5, 5: 2.0, 6: 3.0}
+DEFAULT_HOMOPOLYMER_MULTIPLIER: Final[dict[PositiveInt, NonNegativeFloat]] = {3: 2.0, 4: 3.0, 5: 5.0, 6: 8.0}
 
 
 
@@ -268,16 +268,23 @@ class ErrorConfig(BaseModel):
     # HOMOPOLYMERS ------------------------------------------------------------#
 
     # If we want to consider homopolymers - once a run reaches the min length, every base from there on has its rate
-    #   scaled by how long the run is up to that base (so A A A A A is 1 2 3 4 5, and only the 4th and 5th are scaled).
-    #   Only used in advanced mode, so on by default just means it is on whenever advanced mode is.
+    #   scaled by how long the run is up to that base (so A A A A A is 1 2 3 4 5, and only the 3rd, 4th and 5th are 
+    #   scaled). Only used in advanced mode, so on by default just means it is on whenever advanced mode is.
     homopolymer_check: bool = True
     # Min length before we start useing the multiplier
-    homopolymer_min_length: RunLength = 4
+    homopolymer_min_length: RunLength = 3
     # Multiplier per run length for each type of error, the longest run listed is used for longer runs. Depends on stage
     #   and on techonology being used - defaults are enough to show the effect.
     homopolymer_substitution_multiplier: dict[RunLength, NonNegativeFloat] = DEFAULT_HOMOPOLYMER_MULTIPLIER
     homopolymer_insertion_multiplier: dict[RunLength, NonNegativeFloat] = DEFAULT_HOMOPOLYMER_MULTIPLIER
     homopolymer_deletion_multiplier: dict[RunLength, NonNegativeFloat] = DEFAULT_HOMOPOLYMER_MULTIPLIER
+
+    # Long runs can also lose the whole strand (synthesis fails on it, PCR stalls, the sequencer loses the cluster).
+    #   Heckel et al. note runs longer than six raise dropout. Every base of a strand's longest run from this length on
+    #   adds the rate below as a chance of losing the strand, e.g. a run of 9 is 3 bases past 7 -> 1 - (1 - 0.02)^3.
+    #   Only used in advanced mode, and only when homopolymer_check is on
+    homopolymer_dropout_length: RunLength = 7
+    homopolymer_dropout_rate: Probability = 0.02
 
 
     # GC CONTENT --------------------------------------------------------------#
@@ -478,7 +485,7 @@ class SynthesisConfig(ErrorConfig):
 
 
     # Mean number of copies made of each strand. This is so much higher in real life - but can't do millions of strands
-    synthesis_depth: PositiveInt = 5                    # INCLUDED IN SIMPLE MODE
+    synthesis_depth: PositiveInt = 4                    # INCLUDED IN SIMPLE MODE
 
     # Heckel et al. shows it follows a negative binomial, so most realistic choice, but default will just be fixed
     copy_distribution: CoverageDistribution = CoverageDistribution.FIXED
