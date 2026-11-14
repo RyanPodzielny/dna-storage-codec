@@ -299,7 +299,7 @@ class ErrorConfig(BaseModel):
 
     # Truncation rate - basically just a special case of deletion, the strand is cut and everything past is gone.
     #   This is a per base rate, so longer strands are more likely to be cut: P(strand intact) = (1 - rate)^length.
-    truncation_rate: Probability = 0.00004
+    truncation_rate: Probability = 0.000001
 
     # Chance a whole strand is lost (stuck to a tube, didnt get swept, no PCR, never read, etc). Happens in simple too.
     #   This is a per strand rate, so it is not affected by length. Again depends on stage
@@ -478,7 +478,7 @@ class SynthesisConfig(ErrorConfig):
 
 
     # Mean number of copies made of each strand. This is so much higher in real life - but can't do millions of strands
-    synthesis_depth: PositiveInt = 3                    # INCLUDED IN SIMPLE MODE
+    synthesis_depth: PositiveInt = 5                    # INCLUDED IN SIMPLE MODE
 
     # Heckel et al. shows it follows a negative binomial, so most realistic choice, but default will just be fixed
     copy_distribution: CoverageDistribution = CoverageDistribution.FIXED
@@ -486,6 +486,9 @@ class SynthesisConfig(ErrorConfig):
     # Basically how uneven and nonuniform the copies are in the negative binomial (only used with neg binomial). A
     #   dispersion of 1 is a geometric distribution and nearing 100 is basically uniform.
     copy_dispersion: PositiveFloat = 5.0
+
+    # Much higher in sythesis than any other stage.
+    truncation_rate: Probability = 0.00004
 
 
 
@@ -519,6 +522,10 @@ class AgingConfig(ErrorConfig):
     #   get. Chance a base is deaminated after all the years is 1 - (1 - rate)^years. This basically is just (1 - r) * 
     #   (1 - r) * ... (like half life) for all the years, i.e. it tells us that the chance of an error happened once
     deamination_rate: Probability = 0.00003
+
+    # Storage mostly breaks strands badly enough that they are lost (the half life above), so only a few are left cut
+    #   short. Advanced only, like every truncation
+    truncation_rate: Probability = 0.000001
 
 
 
@@ -557,6 +564,9 @@ class PCRConfig(ErrorConfig):
     #   strand's GC fraction outside the bounds. Only used when gc_content_check is on.
     gc_efficiency_slope: NonNegativeFloat = 0.5
 
+    # A copy cut short loses its far primer, so it mostly isn't amplified or read - keep it rare. Advanced only
+    truncation_rate: Probability = 0.000001
+
 
 
 class SequencingConfig(ErrorConfig):
@@ -586,3 +596,6 @@ class SequencingConfig(ErrorConfig):
     # Same as synthesis, but for reads
     read_distribution: CoverageDistribution = CoverageDistribution.FIXED
     read_dispersion: PositiveFloat = 5.0
+
+    # Cut short strands mostly come from synthesis (chain termination), reading rarely cuts them. Advanced only
+    truncation_rate: Probability = 0.00001
