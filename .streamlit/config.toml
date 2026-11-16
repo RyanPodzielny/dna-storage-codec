@@ -1,0 +1,7 @@
+[client]
+# Hide the deploy button even on local host
+toolbarMode="viewer"
+
+
+[server]
+maxUploadSize=100000

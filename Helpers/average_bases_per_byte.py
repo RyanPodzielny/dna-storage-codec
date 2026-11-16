@@ -7,8 +7,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Callable
 
-# The script lives in Helpers/, so its parent directory is the project root. Need it to open methods.
-PROJECT_ROOT: Path = Path(__file__).parent.parent.resolve()
+# The script lives in Helpers/, so its parent directory is the project root. Need it to open methods. Resolve first, so
+#   a relative __file__ (e.g. "average_bases_per_byte.py") still goes up from this file's real folder rather than from
+#   the current directory
+PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 

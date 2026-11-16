@@ -485,7 +485,7 @@ class SynthesisConfig(ErrorConfig):
 
 
     # Mean number of copies made of each strand. This is so much higher in real life - but can't do millions of strands
-    synthesis_depth: PositiveInt = 4                    # INCLUDED IN SIMPLE MODE
+    synthesis_depth: PositiveInt = 5                    # INCLUDED IN SIMPLE MODE
 
     # Heckel et al. shows it follows a negative binomial, so most realistic choice, but default will just be fixed
     copy_distribution: CoverageDistribution = CoverageDistribution.FIXED

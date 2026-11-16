@@ -2,6 +2,9 @@
 This module tests framing and deframing files with every combination of encoder, indexer, inner code, and outer code.
 Each combination is framed with a FramerConfig, saved with the Serializer, then decoded from only the saved file to
 check that it can be recovered.
+
+Run from anywhere, e.g. from the project root:
+    python3 Helpers/test_encoders.py
 """
 
 
@@ -11,6 +14,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+# This file lives in Helpers, so add the project root to the path so the imports below (Encode, Serialize) can be found
+#   no matter where the script is run from. Resolve first, so a relative __file__ (e.g. "test_encoders.py") still
+#   goes up from this file's real folder rather than from the current directory
+PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from Encode.Methods.Encoding import Encoding
 from Encode.Methods.HuffmanCoding import ComplementaryTree, Goldman, BitScanQuaternary, Pgram, Quaternary, Ternary
 from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
@@ -29,8 +40,8 @@ from Serialize.EncoderSerializer import Serializer
 #--------------------------------------------------------------------------#
 
 
-# Our testing directories 
-TESTING_DIR: Path = Path("Testing")
+# Our testing directories, from the project root so they are the same no matter where the script is run from
+TESTING_DIR: Path = PROJECT_ROOT / "Testing"
 ORIGINAL_DIR: Path = TESTING_DIR / "Original"
 ENCODED_DIR: Path = TESTING_DIR / "Encoded"
 DECODED_DIR: Path = TESTING_DIR / "Decoded"
