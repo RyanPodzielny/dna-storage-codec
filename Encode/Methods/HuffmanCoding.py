@@ -927,11 +927,11 @@ class Pgram(Huffman):
         if self.M < 0:
             raise ValueError("Maximum p-gram length must be greater than 0")
 
-        self.EVEN: tuple[str, str] = ('G', 'T')
-        self.ODD: tuple[str, str] = ('A', 'C')
+        self.EVEN: tuple[str, str] = (Base.G.value, Base.T.value)
+        self.ODD: tuple[str, str] = (Base.A.value, Base.C.value)
 
-        self.COMPLEMENT: dict[str, str] = {'A': 'G', 'C': 'T',
-                                           'G': 'A', 'T': 'C'}
+        self.COMPLEMENT: dict[str, str] = {Base.A.value: Base.G.value, Base.C.value: Base.T.value,
+                                           Base.G.value: Base.A.value, Base.T.value: Base.C.value}
 
         # Will use function, placeholder
         self.ESTIMATED_BASES_PER_BYTE: float = max(Pgram.PGRAM_BASES_PER_BYTE.values())
@@ -1188,6 +1188,14 @@ class Pgram(Huffman):
             if len(huffman_code) % 2 == 1:
                 is_complementary = not is_complementary
 
+            # Ensure the code doesn't exceed the payload length - this leads to infinite loop
+            if len(huffman_code) > payload_length:
+                raise PayloadLengthError(
+                    message=f"Pgram code length {len(huffman_code)} exceeds payload length {payload_length}"
+                            f" - extend oligo length",
+                    payload_length=payload_length
+                )
+
             # Add to the coded message
             coded_message += huffman_code
             if segment_flag and len(coded_message) > payload_length:
@@ -1313,11 +1321,11 @@ class Pgram(Huffman):
 
             # Build the optimal coding for the next segment of data
             encoded_message, last_data_index = self._build_optimal_coding(
-                data[len(data) - data_length:], 
-                huffman_codes, 
-                payload_length, 
-                True,
-                previous_sequences[bases_index][-1]
+                data=data[len(data) - data_length:], 
+                huffman_codes=huffman_codes, 
+                payload_length=payload_length, 
+                segment_flag=True,
+                previous_base=previous_sequences[bases_index][-1]
             )
             segments.append(encoded_message)
             bases_index += 1
@@ -1473,6 +1481,17 @@ class ComplementaryTree(Pgram):
 
         Returns:
             A dictionary of constructor argument names to their values.
+        """
+        return {}
+
+
+    @override
+    def parameters(self) -> dict[str, Any]:
+        """
+        Gets the parameters of the encoding. We have no args despite being a pgram, since we are always just m=1.
+
+        Returns:
+            A dictionary of parameter names to their values.
         """
         return {}
 
