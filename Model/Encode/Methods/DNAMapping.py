@@ -7,9 +7,9 @@ Uses both standard DNA mapping and Huffman coding for compression.
 """
 
 from typing import Any, Final, override
-from Helpers.Errors import PayloadLengthError
-from Encode.Methods.Encoding import Encoding
-from Encode.Methods.HuffmanCoding import Huffman
+from Model.Helpers.Errors import PayloadLengthError
+from Model.Encode.Methods.Encoding import Encoding
+from Model.Encode.Methods.HuffmanCoding import Huffman
 
 
 class DNAMap(Encoding):

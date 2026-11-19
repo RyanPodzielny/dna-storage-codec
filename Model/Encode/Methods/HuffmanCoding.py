@@ -11,9 +11,9 @@ be stored differently in a real application.
 
 import math
 from typing import Any, Final, override
-from Helpers.Errors import EncodingError, IndexingError, PayloadLengthError
-from Encode.Methods.Encoding import Base, Encoding
-from Helpers.PriorityQueue import PriorityQueue
+from Model.Helpers.Errors import EncodingError, IndexingError, PayloadLengthError
+from Model.Encode.Methods.Encoding import Base, Encoding
+from Model.Helpers.PriorityQueue import PriorityQueue
 
 
 class Huffman(Encoding):

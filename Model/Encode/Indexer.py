@@ -8,9 +8,9 @@ from abc import abstractmethod
 from functools import lru_cache
 from typing import Any, Final, override
 
-from Helpers.Errors import EncodingError, MaxRunLengthError, RankError, UnrankError
-from Encode.Methods.HuffmanCoding import Goldman, Huffman
-from Encode.Methods.Encoding import Encoding
+from Model.Helpers.Errors import EncodingError, MaxRunLengthError, RankError, UnrankError
+from Model.Encode.Methods.HuffmanCoding import Goldman, Huffman
+from Model.Encode.Methods.Encoding import Encoding
 
 
 class Indexer:

@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegative
 
 import numpy as np
 
-from Encode.Methods.Encoding import Base
+from Model.Encode.Methods.Encoding import Base
 
 
 #------------------------------------------------------------------------------#

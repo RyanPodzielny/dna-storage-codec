@@ -1,3 +1,5 @@
+# TODO: add module descirption
+
 from enum import StrEnum
 from pathlib import Path
 from tempfile import mkdtemp
@@ -8,16 +10,16 @@ import streamlit as st
 from pydantic import ValidationError
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
-from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
-from Encode.ErrorCorrection.OuterCodes import DirectDNAGoldmanRedundancy, DirectDNARSOuter, DirectDNAXOR, \
+from Model.Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
+from Model.Encode.ErrorCorrection.OuterCodes import DirectDNAGoldmanRedundancy, DirectDNARSOuter, DirectDNAXOR, \
     GoldmanRedundancy, OuterCodes, RSOuter, XOR
-from Encode.Indexer import DNAMapIndexer, EnumerativeIndexer, GoldmanIndexer, Indexer
-from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
-from Encode.Methods.Encoding import Encoding, EncodingStats
-from Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryTree, Goldman, Pgram, Quaternary, Ternary
-from Encode.OligoFramer import FramerConfig, OligoFramer
-from Helpers.Errors import Error
-from Serialize.EncoderSerializer import Serializer
+from Model.Encode.Indexer import DNAMapIndexer, EnumerativeIndexer, GoldmanIndexer, Indexer
+from Model.Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
+from Model.Encode.Methods.Encoding import Encoding, EncodingStats
+from Model.Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryTree, Goldman, Pgram, Quaternary, Ternary
+from Model.Encode.OligoFramer import FramerConfig, OligoFramer
+from Model.Helpers.Errors import Error
+from Model.Serialize.EncoderSerializer import Serializer
 
 
 #------------------------------------------------------------------------------#
@@ -1102,6 +1104,7 @@ HOMOPOLYMER_FREE: Final[set[type[Encoding]]] = {Goldman, Pgram, ComplementaryTre
 
 # Page title and info
 st.title("Encoding")
+# TODO: add a description of the page
 st.write("TODO: add a descirption of the page")
 
 

@@ -12,8 +12,8 @@ its based on these papers - 2002 is origin and 2017 is what made it fast:
 
 from spoa import poa
 
-from Convergence.Clustering import Clustering
-from Helpers.Errors import ConsensusError
+from Model.Convergence.Clustering import Clustering
+from Model.Helpers.Errors import ConsensusError
 
 
 

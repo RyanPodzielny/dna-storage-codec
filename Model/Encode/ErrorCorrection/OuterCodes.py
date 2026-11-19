@@ -16,11 +16,11 @@ import galois
 import numpy as np
 import math
 
-from Helpers.Errors import EncodingError, MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, \
+from Model.Helpers.Errors import EncodingError, MismatchSegments, NotEnoughPreviousSegments, OuterCodeError, \
     PayloadLengthError
-from Encode.Indexer import GoldmanIndexer
-from Encode.Methods.Encoding import Base, Encoding
-from Encode.Methods.HuffmanCoding import Goldman, Huffman
+from Model.Encode.Indexer import GoldmanIndexer
+from Model.Encode.Methods.Encoding import Base, Encoding
+from Model.Encode.Methods.HuffmanCoding import Goldman, Huffman
 
 
 class OuterCodes():

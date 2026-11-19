@@ -7,17 +7,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Callable
 
-# The script lives in Helpers/, so its parent directory is the project root. Need it to open methods. Resolve first, so
+# The script lives in Model/Helpers/, so its grandparent directory is the project root. Need it to open methods. Resolve first, so
 #   a relative __file__ (e.g. "average_bases_per_byte.py") still goes up from this file's real folder rather than from
 #   the current directory
-PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
-from Encode.Methods.Encoding import Encoding
-from Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryTree, Goldman, Huffman, Pgram, Quaternary, Ternary
-from Serialize.EncoderSerializer import Serializer
+from Model.Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
+from Model.Encode.Methods.Encoding import Encoding
+from Model.Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryTree, Goldman, Huffman, Pgram, Quaternary, Ternary
+from Model.Serialize.EncoderSerializer import Serializer
 
 
 class EncodingRun:

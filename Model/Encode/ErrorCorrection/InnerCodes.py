@@ -12,9 +12,9 @@ from abc import abstractmethod
 import reedsolo 
 from fastcrc import crc16, crc32
 from typing import Any, Callable, Final, override
-from Encode.Indexer import Indexer
-from Encode.Methods.Encoding import Base, Encoding
-from Helpers.Errors import InnerCodeError, RankError
+from Model.Encode.Indexer import Indexer
+from Model.Encode.Methods.Encoding import Base, Encoding
+from Model.Helpers.Errors import InnerCodeError, RankError
 
 
 class InnerCodes():

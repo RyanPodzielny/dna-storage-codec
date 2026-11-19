@@ -17,12 +17,12 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt, PositiveInt
 from pydantic.dataclasses import dataclass
 
-from Helpers.Errors import Error, ExpectedLengthError, IndexingError, PayloadLengthError, UnrankError
-from Encode.Methods.Encoding import Base, Encoding, EncodingStats
-from Encode.Indexer import Indexer
-from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
-from Encode.ErrorCorrection.OuterCodes import OuterCodes
-from Encode.Methods.HuffmanCoding import Goldman, Huffman
+from Model.Helpers.Errors import Error, ExpectedLengthError, IndexingError, PayloadLengthError, UnrankError
+from Model.Encode.Methods.Encoding import Base, Encoding, EncodingStats
+from Model.Encode.Indexer import Indexer
+from Model.Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
+from Model.Encode.ErrorCorrection.OuterCodes import OuterCodes
+from Model.Encode.Methods.HuffmanCoding import Goldman, Huffman
 
 
 #------------------------------------------------------------------------------#

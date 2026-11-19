@@ -18,8 +18,8 @@ import edlib
 # Same as the other configs - pydantic does all the validation for us, even after a user changes a field
 from pydantic import BaseModel, ConfigDict, PositiveInt
 
-from Encode.OligoFramer import Primer
-from Simulate.ErrorConfig import Probability
+from Model.Encode.OligoFramer import Primer
+from Model.Simulate.ErrorConfig import Probability
 
 #------------------------------------------------------------------------------#
 #                                                                              #

@@ -19,15 +19,15 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt
 from pydantic.dataclasses import dataclass
-from Helpers.Errors import NotInRegistryError
-from Encode.OligoFramer import FramerConfig, OligoDeframer, OligoFramer, Primer
-from Encode.Methods.Encoding import Encoding
-from Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryTree, Goldman, Huffman, Pgram, Quaternary, \
+from Model.Helpers.Errors import NotInRegistryError
+from Model.Encode.OligoFramer import FramerConfig, OligoDeframer, OligoFramer, Primer
+from Model.Encode.Methods.Encoding import Encoding
+from Model.Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryTree, Goldman, Huffman, Pgram, Quaternary, \
     Ternary
-from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
-from Encode.Indexer import DNAMapIndexer, EnumerativeIndexer, GoldmanIndexer, Indexer
-from Encode.ErrorCorrection.InnerCodes import CheckSum, InnerCodes, RSInner
-from Encode.ErrorCorrection.OuterCodes import DirectDNAGoldmanRedundancy, DirectDNARSOuter, DirectDNAXOR, \
+from Model.Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
+from Model.Encode.Indexer import DNAMapIndexer, EnumerativeIndexer, GoldmanIndexer, Indexer
+from Model.Encode.ErrorCorrection.InnerCodes import CheckSum, InnerCodes, RSInner
+from Model.Encode.ErrorCorrection.OuterCodes import DirectDNAGoldmanRedundancy, DirectDNARSOuter, DirectDNAXOR, \
     GoldmanRedundancy, OuterCodes, RSOuter, XOR
 
 

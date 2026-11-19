@@ -4,7 +4,7 @@ Each combination is framed with a FramerConfig, saved with the Serializer, then 
 check that it can be recovered.
 
 Run from anywhere, e.g. from the project root:
-    python3 Helpers/test_encoders.py
+    python3 Model/Helpers/test_encoders.py
 """
 
 
@@ -15,22 +15,22 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-# This file lives in Helpers, so add the project root to the path so the imports below (Encode, Serialize) can be found
+# This file lives in Model/Helpers, so add the project root to the path so the imports below (Model.Encode, Model.Serialize) can be found
 #   no matter where the script is run from. Resolve first, so a relative __file__ (e.g. "test_encoders.py") still
 #   goes up from this file's real folder rather than from the current directory
-PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from Encode.Methods.Encoding import Encoding
-from Encode.Methods.HuffmanCoding import ComplementaryTree, Goldman, BitScanQuaternary, Pgram, Quaternary, Ternary
-from Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
-from Encode.Indexer import DNAMapIndexer, EnumerativeIndexer, GoldmanIndexer, Indexer
-from Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
-from Encode.ErrorCorrection.OuterCodes import DirectDNAGoldmanRedundancy, DirectDNARSOuter, DirectDNAXOR, \
+from Model.Encode.Methods.Encoding import Encoding
+from Model.Encode.Methods.HuffmanCoding import ComplementaryTree, Goldman, BitScanQuaternary, Pgram, Quaternary, Ternary
+from Model.Encode.Methods.DNAMapping import DNAMap, DNAMapHuffman
+from Model.Encode.Indexer import DNAMapIndexer, EnumerativeIndexer, GoldmanIndexer, Indexer
+from Model.Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
+from Model.Encode.ErrorCorrection.OuterCodes import DirectDNAGoldmanRedundancy, DirectDNARSOuter, DirectDNAXOR, \
     GoldmanRedundancy, OuterCodes, RSOuter, XOR
-from Encode.OligoFramer import FramerConfig, OligoDeframer, OligoFramer
-from Serialize.EncoderSerializer import Serializer
+from Model.Encode.OligoFramer import FramerConfig, OligoDeframer, OligoFramer
+from Model.Serialize.EncoderSerializer import Serializer
 
 
 #--------------------------------------------------------------------------#

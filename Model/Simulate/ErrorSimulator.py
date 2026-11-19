@@ -18,9 +18,9 @@ from typing import cast
 # Going to np for random numbers as it is both faster and we will need to draw from distributions for some stages.
 import numpy as np
 
-from Encode.Methods.Encoding import Base
-from Helpers.Errors import SimulationError
-from Simulate.ErrorConfig import DNA_BASES, CoverageDistribution, GCWindow, Stage, ErrorConfig, SynthesisConfig, \
+from Model.Encode.Methods.Encoding import Base
+from Model.Helpers.Errors import SimulationError
+from Model.Simulate.ErrorConfig import DNA_BASES, CoverageDistribution, GCWindow, Stage, ErrorConfig, SynthesisConfig, \
     AgingConfig, PCRConfig, SequencingConfig
 
 
