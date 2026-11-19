@@ -1,4 +1,8 @@
-# TODO: add module descirption
+"""
+Module for the Encoding page, which handles the user interface for the DNA encoding process. This includes file upload, 
+text input, encoder selection, oligo settings, indexer settings, and error correction code settings. The module provides
+a streamlined interface for users to configure their encoding preferences and initiate the encoding process.
+"""
 
 from enum import StrEnum
 from pathlib import Path
@@ -8,7 +12,6 @@ from typing import Final
 import pandas as pd
 import streamlit as st
 from pydantic import ValidationError
-from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 from Model.Encode.ErrorCorrection.InnerCodes import CheckSum, RSInner
 from Model.Encode.ErrorCorrection.OuterCodes import DirectDNAGoldmanRedundancy, DirectDNARSOuter, DirectDNAXOR, \
@@ -20,6 +23,8 @@ from Model.Encode.Methods.HuffmanCoding import BitScanQuaternary, ComplementaryT
 from Model.Encode.OligoFramer import FramerConfig, OligoFramer
 from Model.Helpers.Errors import Error
 from Model.Serialize.EncoderSerializer import Serializer
+from View.Helpers import ViewHelpers
+from View.Helpers.ViewHelpers import UploadKeys, clear_upload, contents_to_file, file_uploader, slider_with_input
 
 
 #------------------------------------------------------------------------------#
@@ -36,21 +41,24 @@ class Inputs(StrEnum):
     FILE_UPLOAD = "File Upload"
     TEXT_INPUT = "Text Input"
 
+    # Keys for the file uploader, so we can store the uploaded file in session state and use it across pages
+    UPLOAD_WIDGET = "file_upload"
     UPLOAD_FILE_NAME = "uploaded_file_name"
     UPLOAD_FILE_PATH = "uploaded_file_path"
     UPLOAD_ERROR = "upload_error"
 
+    # Keys for the text area input, so we can store the submitted text in session state and use it across pages
     SUBMITTED_TEXT = "submitted_text"
     SUBMITTED_TEXT_PATH = "submitted_text_path"
 
 
-def _clear_uploaded_file() -> None:
-    """
-    Forget the uploaded file, so nothing from the file upload is used for encoding.
-    """
-    st.session_state.pop(Inputs.UPLOAD_FILE_NAME, None)
-    st.session_state.pop(Inputs.UPLOAD_FILE_PATH, None)
-    st.session_state.pop(Inputs.UPLOAD_ERROR, None)
+# Every key the file uploader keeps its upload under
+UPLOAD_KEYS: Final[UploadKeys] = UploadKeys(
+    widget=Inputs.UPLOAD_WIDGET,
+    name=Inputs.UPLOAD_FILE_NAME,
+    path=Inputs.UPLOAD_FILE_PATH,
+    error=Inputs.UPLOAD_ERROR,
+)
 
 
 def _clear_submitted_text() -> None:
@@ -62,92 +70,6 @@ def _clear_submitted_text() -> None:
     st.session_state.pop(Inputs.SUBMITTED_TEXT_PATH, None)
     st.session_state[Inputs.TEXT_INPUT] = ""
 
-
-def _contents_to_file(contents: str, filename: str) -> Path:
-    """
-    Write the contents to a temporary file and return the path to that file.
-
-    Returns:
-        A Path object pointing to the temporary file containing the contents.
-    """
-    # Want to write to temp file as our backend accepts an in-path. Makes it much easier. Using mkdtemp instead of
-    #   TemporaryDirectory, as TemporaryDirectory deletes the folder as soon as the object is garbage collected (i.e.
-    #   right after this function returns), so the path we hand back would point at nothing.
-    temp_directory: str = mkdtemp(prefix="dna_codec_")
-    file_path: Path = Path(temp_directory) / filename
-    with open(file_path, 'w', encoding='utf-8') as f:
-        f.write(contents)
-    
-    return file_path
-
-
-def _store_uploaded_file() -> None:
-    """
-    Callback for the file uploader, runs only when the user uploads a new file or removes one. Streamlit seems to just 
-    drop the uploaded file when the uploader isn't drawn (when user switches to text input), so we keep our own copy.
-    Using a callback means we can tell user removed the file" apart from uploader was hidden and came back empty.
-    """
-    upload: UploadedFile | None = st.session_state["file_upload"]
-    st.session_state.pop(Inputs.UPLOAD_ERROR, None)
-
-    # User removed the file, so just clear it 
-    if upload is None:
-        _clear_uploaded_file()
-        return
-
-    # Ensure we can read the file as text, and handle any errors - letting users know if the file is not valid text
-    file_contents: str
-    try:
-        file_contents = upload.getvalue().decode("utf-8")
-    except UnicodeDecodeError:
-        # Can't show the error from inside a callback (it would draw above everything), so flag it for the page
-        _clear_uploaded_file()
-        st.session_state[Inputs.UPLOAD_ERROR] = upload.name
-        return
-
-    # Only one input is used at a time, so a valid file replaces any submitted text
-    _clear_submitted_text()
-
-    # Convert to a temporary file to be used by the encoder - done once here, not on every rerun
-    st.session_state[Inputs.UPLOAD_FILE_NAME] = upload.name
-    st.session_state[Inputs.UPLOAD_FILE_PATH] = _contents_to_file(file_contents, upload.name)
-
-
-def _file_uploader() -> Path | None:
-    """
-    Upload a text-based file and return the path to a temporary file containing its contents. The file is kept in
-    session state, so it is still used after switching to text input and back.
-
-    Returns:
-        The path to the temporary file containing the uploaded file's contents, or None if there is no valid file.
-    """
-    # Actual file upload button
-    st.file_uploader(
-        label="Upload any text-based file to encode you wish to encode on:",
-        key="file_upload",
-        max_upload_size=None,               # No limit on file size - probs a bad idea but thats on the user
-        accept_multiple_files=False,        # Only one at a time
-        on_change=_store_uploaded_file,     # Save (or forget) the file only when the user changes it
-    )
-
-    # The last file the user picked could not be read as text
-    if Inputs.UPLOAD_ERROR in st.session_state:
-        st.error(f"{st.session_state[Inputs.UPLOAD_ERROR]} is not a valid text file. Please upload a text-based file.")
-        return None
-
-    # Nothing uploaded yet (or it was removed) - nothing to encode
-    if Inputs.UPLOAD_FILE_PATH not in st.session_state:
-
-        # Let the user know uploading will throw away the text they already submitted if we have some
-        if Inputs.SUBMITTED_TEXT_PATH in st.session_state:
-            st.warning("Currently using your submitted text. Uploading a file will replace it.")
-
-        return None
-
-    st.success(f"File uploaded successfully! Using {st.session_state[Inputs.UPLOAD_FILE_NAME]} for encoding.")
-
-    return st.session_state[Inputs.UPLOAD_FILE_PATH]
-    
 
 def _area_input() -> Path | None:
     """
@@ -177,11 +99,11 @@ def _area_input() -> Path | None:
             return None
 
         # Only one input is used at a time, so submitted text replaces any uploaded file
-        _clear_uploaded_file()
+        clear_upload(UPLOAD_KEYS)
 
         # Update our session state
         st.session_state[Inputs.SUBMITTED_TEXT] = input_text
-        st.session_state[Inputs.SUBMITTED_TEXT_PATH] = _contents_to_file(input_text, "text_input.txt")
+        st.session_state[Inputs.SUBMITTED_TEXT_PATH] = contents_to_file(input_text, "text_input.txt")
 
     # Nothing submitted yet (or the last submit was empty) - nothing to encode
     if Inputs.SUBMITTED_TEXT_PATH not in st.session_state:
@@ -195,6 +117,37 @@ def _area_input() -> Path | None:
     st.success("Text submitted successfully! Using inputted text for encoding.")
     
     return st.session_state[Inputs.SUBMITTED_TEXT_PATH]
+
+
+def _file_uploader() -> Path | None:
+    """
+    Upload a text-based file and return the path to a temporary file containing its contents. The file is kept in
+    session state, so it is still used after switching to text input and back.
+
+    Returns:
+        The path to the temporary file containing the uploaded file's contents, or None if there is no valid file.
+    """
+    # Shared uploader handles storing the file and showing an error if it is not text
+    in_path: Path | None = file_uploader(
+        label="Upload any text-based file to encode you wish to encode on:",
+        keys=UPLOAD_KEYS,
+        error_message="is not a valid text file. Please upload a text-based file.",
+        on_upload=_clear_submitted_text,    # Only one input is used at a time, so a valid file replaces any text
+    )
+
+    # Nothing uploaded yet (or it was removed) - nothing to encode
+    if in_path is None:
+
+        # Let the user know uploading will throw away the text they already submitted if we have some (the uploader
+        #   already shows an error if the last file was not valid, so no need to show this too)
+        if Inputs.SUBMITTED_TEXT_PATH in st.session_state and Inputs.UPLOAD_ERROR not in st.session_state:
+            st.warning("Currently using your submitted text. Uploading a file will replace it.")
+
+        return None
+
+    st.success(f"File uploaded successfully! Using {st.session_state[Inputs.UPLOAD_FILE_NAME]} for encoding.")
+
+    return in_path
 
 
 def show_input_settings() -> Path | None:
@@ -323,75 +276,6 @@ BITSCAN_K_DEFAULT: Final[int] = 16
 PGRAM_M_DEFAULT: Final[int] = 3
 
 
-def _sync_widget(source_key: str, target_key: str) -> None:
-    """
-    Callback to copy one widget's value into another, so a slider and number input always show the same thing.
-
-    Args:
-        source_key: The key of the widget the user just changed.
-        target_key: The key of the widget to update.
-    """
-    st.session_state[target_key] = st.session_state[source_key]
-
-
-def _slider_with_input(label: str, key: str, min_value: int, max_value: int, default: int, help: str) -> int:
-    """
-    A slider with a number input beside it, kept in sync. The slider is quick to drag, the number input is easier for
-    an exact value. Both keep their value for the whole session, so switching encoders and back doesn't reset them.
-
-    Args:
-        label: The label shown above the slider.
-        key: The base key, the slider and number input use this with "_slider" and "_number" added.
-        min_value: The lowest value allowed.
-        max_value: The highest value allowed.
-        default: The value used before the user changes anything.
-        help: The tooltip shown beside the label.
-
-    Returns:
-        The value picked.
-    """
-    slider_key: str = f"{key}_slider"
-    number_key: str = f"{key}_number"
-
-    # Set the starting value through session state instead of value=, Streamlit warns if a widget gets both
-    st.session_state.setdefault(slider_key, default)
-    st.session_state.setdefault(number_key, default)
-
-    # Create two columns, one for the slider and one for the number input, and align them at the bottom so they line up
-    #   giving more space to the slider as it is bigger.
-    slider_column, number_column = st.columns([3, 1], vertical_alignment="bottom")
-
-    # Slider is the main widget, so it has the label and help. 
-    with slider_column:
-        value: int = st.slider(
-            label=label,
-            min_value=min_value,
-            max_value=max_value,
-            step=1,
-            key=slider_key,
-            help=help,
-            on_change=_sync_widget,             # Ensure we keep keep the number we saved
-            args=(slider_key, number_key),
-            persist_state="session",            # Same here - keep the value for the whole session
-        )
-
-    # The number input is hidden, as the slider already has the label. It is only there to let the user type in a value
-    with number_column:
-        st.number_input(
-            label=label,
-            min_value=min_value,
-            max_value=max_value,
-            step=1,
-            key=number_key,
-            on_change=_sync_widget,            # Ensure we keep the slider we saved
-            args=(number_key, slider_key),
-            label_visibility="collapsed",      # Slider already has the label
-            persist_state="session",           # Keep the value for the whole session
-        )
-
-    return value
-
-
 def _find_optimal_k(in_path: str) -> int:
     """
     Tries every k and returns the one with the best coding density for the file. Cached, as it encodes the file once
@@ -447,7 +331,7 @@ def show_encoder_settings(in_path: Path | None) -> Encoding:
     match choice:
         case EncoderNames.BITSCAN_QUATERNARY:
             # Slider for the bit scan
-            k: int = _slider_with_input(
+            k: int = slider_with_input(
                 label="Bits scanned at a time (k):",
                 key=EncoderNames.BITSCAN_K,
                 min_value=BITSCAN_K_RANGE[0],
@@ -469,7 +353,7 @@ def show_encoder_settings(in_path: Path | None) -> Encoding:
 
         case EncoderNames.PGRAM:
             # Slider for the p-gram length
-            m: int = _slider_with_input(
+            m: int = slider_with_input(
                 label="Maximum p-gram length (m):",
                 key=EncoderNames.PGRAM_M,
                 min_value=PGRAM_M_RANGE[0],
@@ -651,7 +535,7 @@ def show_indexer_settings() -> tuple[type[Indexer], int, bool]:
     match choice:
         case IndexerNames.ENUMERATIVE:
             # Slider for the enumerative n
-            max_run_length: int = _slider_with_input(
+            max_run_length: int = slider_with_input(
                 label="Maximum homopolymer runlength:",
                 key=IndexerNames.ENUMERATIVE_N,
                 min_value=1,
@@ -730,7 +614,7 @@ def show_inner_correction_settings(indexer: type[Indexer], max_run_length: int) 
         
         case InnerCodeNames.REED_SOLOMON:
             # Slider for the number of parity bytes
-            parity_bytes: int = _slider_with_input(
+            parity_bytes: int = slider_with_input(
                 label="Parity bytes:",
                 key=InnerCodeNames.REED_SOLOMON_PARITY,
                 min_value=2,
@@ -817,7 +701,7 @@ def show_outer_correction_settings(is_homopolymer_free: bool) -> OuterCodes | No
         
         case OuterCodeNames.REED_SOLOMON:
             # Slider is a whole number percent, the outer code wants it between 0 and 1
-            redundancy_percent: int = _slider_with_input(
+            redundancy_percent: int = slider_with_input(
                 label="Redundancy (%):",
                 key=OuterCodeNames.REED_SOLOMON_REDUNDANCY,
                 min_value=1,
@@ -845,12 +729,13 @@ def show_outer_correction_settings(is_homopolymer_free: bool) -> OuterCodes | No
 
 # Session state keys for the last run
 class ResultKeys(StrEnum):
+    IN_PATH = "encoded_in_path"
     FRAMER = "framer"
     ORIGINAL_SIZE = "original_size"
     JSON = "framer_json"
     ERROR = "encode_error"
 
-# Runs of at least this length are counted, same as test_encoders.py
+# Runs of at least this length are counted, same as test_encoders.py. Not gonna make it a setting - just easier.
 RUN_LENGTH_K: Final[int] = 3
 
 
@@ -881,6 +766,9 @@ def encode(in_path: Path,
     # Forget the last run first, so an error never shows next to old results
     for key in ResultKeys:
         st.session_state.pop(key, None)
+
+    # Remember which input these results are for, so they are hidden if the user removes or changes the input
+    st.session_state[ResultKeys.IN_PATH] = in_path
 
     # The indexer and checksum are built here, each run needs its own new indexer as the framer changes its width
     indexer_type: type[Indexer] = indexer[0]
@@ -1176,15 +1064,24 @@ if st.button("Encode", type="primary", disabled=not ready):
                 outer_codes=outer_codes,
             )
 
-# If There was an error show
-if ResultKeys.ERROR in st.session_state:
-    st.error(f"Encoding failed. {st.session_state[ResultKeys.ERROR]}")
+# Only show results for the input currently picked, so they disappear if the file is removed or the input changes
+if st.session_state.get(ResultKeys.IN_PATH, None) == in_path:
+    # If There was an error show
+    if ResultKeys.ERROR in st.session_state:
+        st.error(f"Encoding failed. {st.session_state[ResultKeys.ERROR]}")
 
-# Everything was great - show that it succeeded and add a subsection for downloading results
-if ResultKeys.FRAMER in st.session_state:
-    st.success("Encoded successfully!")
+    # Everything was great - show that it succeeded and add a subsection for downloading results
+    if ResultKeys.FRAMER in st.session_state:
+        st.success("Encoded successfully!")
 
-    # Show results
-    show_oligo_layout(st.session_state[ResultKeys.FRAMER])
-    show_info(st.session_state[ResultKeys.FRAMER], st.session_state[ResultKeys.ORIGINAL_SIZE])
-    show_downloads(st.session_state[ResultKeys.FRAMER], st.session_state[ResultKeys.JSON])
+        # Show results and downloads
+        show_oligo_layout(st.session_state[ResultKeys.FRAMER])
+        show_info(st.session_state[ResultKeys.FRAMER], st.session_state[ResultKeys.ORIGINAL_SIZE])
+        show_downloads(st.session_state[ResultKeys.FRAMER], st.session_state[ResultKeys.JSON])
+
+        # Store the last run's json path in session state
+        st.session_state[ViewHelpers.ENCODED_JSON_PATH_KEY] = st.session_state.get(ResultKeys.JSON, None)
+
+# Results are hidden, so the other pages shouldn't keep using oligos for an input that is no longer picked
+else:
+    st.session_state.pop(ViewHelpers.ENCODED_JSON_PATH_KEY, None)
