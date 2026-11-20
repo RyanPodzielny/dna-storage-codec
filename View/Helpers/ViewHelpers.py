@@ -4,13 +4,17 @@ session state. These are used in multiple places, so they are kept here to avoid
 """
 
 
-from pydantic import BaseModel
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Callable
+from typing import Any, Callable, TypeVar
 
 import streamlit as st
 from streamlit.runtime.uploaded_file_manager import UploadedFile
+from pydantic import BaseModel, ValidationError
+
+from Model.Encode.Methods.Encoding import Encoding
+from Model.Helpers.Errors import Error
+from Model.Serialize.EncoderSerializer import Serializer
 
 
 #------------------------------------------------------------------------------#
@@ -24,6 +28,9 @@ from streamlit.runtime.uploaded_file_manager import UploadedFile
 # Key so we can run encoding process at each page without having to re-upload. Basically just a session state to store
 #   path to the newly encoded JSON file, where we can use in simulation, clustering and decoding.
 ENCODED_JSON_PATH_KEY: str = "encoded_json_path"
+
+# A slider with an input works on either ints or floats, but every number given to one has to be the same type
+Number = TypeVar("Number", int, float)
 
 
 # Just using pydantic instead of dataclass to keep it consistent with everything else
@@ -47,6 +54,72 @@ class UploadKeys(BaseModel):
 #                                                                              #
 #------------------------------------------------------------------------------#
 
+
+
+def text_is_oligos(in_path: Path) -> bool:
+    """
+    Check the text is a list of oligos, one per line. Each line must be ACGT only, and at least 1 character long.
+
+    Args:
+        in_path: The path to the file to check.
+
+    Returns:
+        True if the file contains a list of valid oligos, False otherwise.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        UnicodeDecodeError: If the file is not valid UTF-8 text.
+    """
+    with open(in_path, 'r', encoding='utf-8') as file:
+        for line in file:
+            line = line.strip()
+            # Skip empty lines, as they are not oligos but we don't want to fail on them
+            if not line:
+                continue
+
+            # Check the line is ACGT only
+            if not all(base in Encoding.DNA_BASES for base in line):
+                return False
+
+    return True
+
+
+def is_deframer(json_path: Path) -> bool:
+    """
+    Check the uploaded JSON matches what the deframer expects. Runs once in the uploader's callback, not on every rerun.
+
+    Args:
+        json_path: The path to our copy of the uploaded JSON.
+
+    Returns:
+        True if the file loads as a deframer, False if not.
+    """
+    # Only need to know it loads, the deframer itself is made again when we decode
+    try:
+        Serializer.load_deframer(str(json_path))
+    except (ValidationError, Error, KeyError, TypeError):
+        return False
+
+    return True
+
+
+def clean_primer(primer: str) -> str | None:
+    """
+    Cleans up a primer the user typed, so lowercase and spaces are fine.
+
+    Args:
+        primer: The primer as typed.
+
+    Returns:
+        The primer in uppercase with no spaces, or None if it has anything other than A, C, G, and T.
+    """
+    primer = primer.replace(" ", "").upper()
+
+    # Only bases allowed - an empty primer is fine, it just means no primer
+    if not set(primer) <= Encoding.DNA_BASES:
+        return None
+
+    return primer
 
 
 def contents_to_file(contents: str, filename: str) -> Path:
@@ -200,10 +273,18 @@ def sync_widget(source_key: str, target_key: str) -> None:
     st.session_state[target_key] = st.session_state[source_key]
 
 
-def slider_with_input(label: str, key: str, min_value: int, max_value: int, default: int, help: str) -> int:
+def slider_with_input(label: str,
+                      key: str,
+                      min_value: Number,
+                      max_value: Number,
+                      default: Number,
+                      help: str,
+                      step: Number | None = None,
+                      disabled: bool = False) -> Number:
     """
     A slider with a number input beside it, kept in sync. The slider is quick to drag, the number input is easier for
     an exact value. Both keep their value for the whole session, so switching encoders and back doesn't reset them.
+    Works with ints or floats (e.g. a probability), as long as every number given is the same type.
 
     Args:
         label: The label shown above the slider.
@@ -212,6 +293,8 @@ def slider_with_input(label: str, key: str, min_value: int, max_value: int, defa
         max_value: The highest value allowed.
         default: The value used before the user changes anything.
         help: The tooltip shown beside the label.
+        step: How much the value moves per step, None for Streamlit's default (1 for ints, 0.01 for floats).
+        disabled: Whether both widgets are greyed out, e.g. when the setting isn't used.
 
     Returns:
         The value picked.
@@ -225,17 +308,20 @@ def slider_with_input(label: str, key: str, min_value: int, max_value: int, defa
 
     # Create two columns, one for the slider and one for the number input, and align them at the bottom so they line up
     #   giving more space to the slider as it is bigger.
+    slider_column: Any
+    number_column: Any
     slider_column, number_column = st.columns([3, 1], vertical_alignment="bottom")
 
     # Slider is the main widget, so it has the label and help. 
     with slider_column:
-        value: int = st.slider(
+        value: Number = st.slider(
             label=label,
             min_value=min_value,
             max_value=max_value,
-            step=1,
+            step=step,
             key=slider_key,
             help=help,
+            disabled=disabled,
             on_change=sync_widget,              # Ensure we keep keep the number we saved
             args=(slider_key, number_key),
             persist_state="session",            # Same here - keep the value for the whole session
@@ -247,8 +333,9 @@ def slider_with_input(label: str, key: str, min_value: int, max_value: int, defa
             label=label,
             min_value=min_value,
             max_value=max_value,
-            step=1,
+            step=step,
             key=number_key,
+            disabled=disabled,
             on_change=sync_widget,            # Ensure we keep the slider we saved
             args=(number_key, slider_key),
             label_visibility="collapsed",      # Slider already has the label

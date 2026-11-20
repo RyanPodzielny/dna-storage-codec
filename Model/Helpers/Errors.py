@@ -197,14 +197,3 @@ class SimulationError(Error):
                  *,
                  message: str = "Simulation error occurred"):
         super().__init__(message=f"{message}: An error occurred during the simulation process.")
-        
-
-
-class ConsensusError(Error):
-    """
-    Error raised when a consensus method fails to find a consensus.
-    """
-    def __init__(self, 
-                 *,
-                 message: str = "Consensus method failed to find a consensus"):
-        super().__init__(message=f"{message}: Unable to find a consensus.")

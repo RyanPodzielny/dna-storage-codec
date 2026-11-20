@@ -10,10 +10,37 @@ its based on these papers - 2002 is origin and 2017 is what made it fast:
     (2017): Vaser, Sović, Nagarajan, Šikić "Fast and accurate de novo genome assembly from long uncorrected reads".
 """
 
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
 from spoa import poa
 
 from Model.Convergence.Clustering import Clustering
-from Model.Helpers.Errors import ConsensusError
+
+
+#------------------------------------------------------------------------------#
+#                                                                              #
+#   CONFIGS AND CONFIG TYPES                                                   #
+#                                                                              #
+#------------------------------------------------------------------------------#
+
+
+# POA alignment types, from the spoa library. 0 = local (Smith-Waterman), 1 = global (Needleman-Wunsch), 2 = semi-global
+#   (overlap). spoa throws "invalid alignment type" for anything else
+Alignment = Literal[0, 1, 2]
+
+
+
+class ConsensusConfig(BaseModel):
+    """
+    Holds the configuration for the consensus algorithm. Currently just the alignment type, but could be expanded
+    to include other parameters for the POA algorithm.
+    """
+
+    # No extra fields and validate on assignment, same as every other config
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    
+    alignment_type: Alignment = 1
 
 
 
@@ -23,23 +50,14 @@ class Consensus:
     Each algorithm only has to say how one cluster is turned into one strand.
     """
 
-    def __init__(self, alignment_type: int = 1):
+    def __init__(self, config: ConsensusConfig):
         """
         Initializes the POA consensus algorithm.
 
         Args:
-            alignment_type: The type of alignment to use (0 = local, 1 = global, 2 = semi-global).
+            config: The configuration for the consensus algorithm - current just the alignment type, 
         """
-
-        # spoa's alignment types are 0 = local (Smith-Waterman), 1 = global (Needleman-Wunsch), 2 = semi-global. spoa 
-        #   has defaults and they are explained in the C++ help function, but we aren't really going to change them, so
-        #   just keep it to the obvious.
-        self.alignment_type: int = alignment_type
-
-        if alignment_type not in {0, 1, 2}:
-            raise ConsensusError(
-                message=f"Invalid alignment type: {alignment_type}. Must be 0 (local), 1 (global), or 2 (semi-global)."
-            )
+        self.alignment_type: Alignment = config.alignment_type
 
 
     #--------------------------------------------------------------------------#

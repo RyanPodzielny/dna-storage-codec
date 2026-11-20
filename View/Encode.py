@@ -7,7 +7,7 @@ a streamlined interface for users to configure their encoding preferences and in
 from enum import StrEnum
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Final
+from typing import Any, Final
 
 import pandas as pd
 import streamlit as st
@@ -24,7 +24,8 @@ from Model.Encode.OligoFramer import FramerConfig, OligoFramer
 from Model.Helpers.Errors import Error
 from Model.Serialize.EncoderSerializer import Serializer
 from View.Helpers import ViewHelpers
-from View.Helpers.ViewHelpers import UploadKeys, clear_upload, contents_to_file, file_uploader, slider_with_input
+from View.Helpers.ViewHelpers import UploadKeys, clean_primer, clear_upload, contents_to_file, file_uploader, \
+    slider_with_input
 
 
 #------------------------------------------------------------------------------#
@@ -36,28 +37,28 @@ from View.Helpers.ViewHelpers import UploadKeys, clear_upload, contents_to_file,
 
 
 # Constants
-class Inputs(StrEnum):
+class EncodeInputs(StrEnum):
     # Need to make these keys as Streamlit doesn't keep the text_input box written, when user switches. Just easier.
     FILE_UPLOAD = "File Upload"
     TEXT_INPUT = "Text Input"
 
     # Keys for the file uploader, so we can store the uploaded file in session state and use it across pages
-    UPLOAD_WIDGET = "file_upload"
-    UPLOAD_FILE_NAME = "uploaded_file_name"
-    UPLOAD_FILE_PATH = "uploaded_file_path"
-    UPLOAD_ERROR = "upload_error"
+    UPLOAD_WIDGET = "encode_file_upload"
+    UPLOAD_FILE_NAME = "encode_uploaded_file_name"
+    UPLOAD_FILE_PATH = "encode_uploaded_file_path"
+    UPLOAD_ERROR = "encode_upload_error"
 
     # Keys for the text area input, so we can store the submitted text in session state and use it across pages
-    SUBMITTED_TEXT = "submitted_text"
-    SUBMITTED_TEXT_PATH = "submitted_text_path"
+    SUBMITTED_TEXT = "encode_submitted_text"
+    SUBMITTED_TEXT_PATH = "encode_submitted_text_path"
 
 
 # Every key the file uploader keeps its upload under
 UPLOAD_KEYS: Final[UploadKeys] = UploadKeys(
-    widget=Inputs.UPLOAD_WIDGET,
-    name=Inputs.UPLOAD_FILE_NAME,
-    path=Inputs.UPLOAD_FILE_PATH,
-    error=Inputs.UPLOAD_ERROR,
+    widget=EncodeInputs.UPLOAD_WIDGET,
+    name=EncodeInputs.UPLOAD_FILE_NAME,
+    path=EncodeInputs.UPLOAD_FILE_PATH,
+    error=EncodeInputs.UPLOAD_ERROR,
 )
 
 
@@ -66,9 +67,9 @@ def _clear_submitted_text() -> None:
     Forget the submitted text and empty the text box, so nothing from the text input is used for encoding. Only call
     this while the text box is not drawn (e.g. from the uploader's callback).
     """
-    st.session_state.pop(Inputs.SUBMITTED_TEXT, None)
-    st.session_state.pop(Inputs.SUBMITTED_TEXT_PATH, None)
-    st.session_state[Inputs.TEXT_INPUT] = ""
+    st.session_state.pop(EncodeInputs.SUBMITTED_TEXT, None)
+    st.session_state.pop(EncodeInputs.SUBMITTED_TEXT_PATH, None)
+    st.session_state[EncodeInputs.TEXT_INPUT] = ""
 
 
 def _area_input() -> Path | None:
@@ -83,7 +84,7 @@ def _area_input() -> Path | None:
     with st.form(key="text_input_form"):
         input_text: str = st.text_area(
             label="Enter what you like to encode:",
-            key=Inputs.TEXT_INPUT,
+            key=EncodeInputs.TEXT_INPUT,
             required=True,                  # Browser blocks submitting an empty or whitespace only box
             # Streamlit  for some reason just throws away a widget's value when it isn't drawn, which empties the box 
             #   while the success message (from our own session state) stays.
@@ -102,21 +103,22 @@ def _area_input() -> Path | None:
         clear_upload(UPLOAD_KEYS)
 
         # Update our session state
-        st.session_state[Inputs.SUBMITTED_TEXT] = input_text
-        st.session_state[Inputs.SUBMITTED_TEXT_PATH] = contents_to_file(input_text, "text_input.txt")
+        st.session_state[EncodeInputs.SUBMITTED_TEXT] = input_text
+        st.session_state[EncodeInputs.SUBMITTED_TEXT_PATH] = contents_to_file(input_text, "text_input.txt")
 
     # Nothing submitted yet (or the last submit was empty) - nothing to encode
-    if Inputs.SUBMITTED_TEXT_PATH not in st.session_state:
+    if EncodeInputs.SUBMITTED_TEXT_PATH not in st.session_state:
         
         # Let the user know submitting will throw away the file they already uploaded
-        if Inputs.UPLOAD_FILE_PATH in st.session_state:
-            st.warning(f"Currently using {st.session_state[Inputs.UPLOAD_FILE_NAME]}. Submitting text will replace it.")
+        if EncodeInputs.UPLOAD_FILE_PATH in st.session_state:
+            st.warning(f"Currently using {st.session_state[EncodeInputs.UPLOAD_FILE_NAME]}. Submitting text will"
+                       f" replace it.")
 
         return None
 
     st.success("Text submitted successfully! Using inputted text for encoding.")
     
-    return st.session_state[Inputs.SUBMITTED_TEXT_PATH]
+    return st.session_state[EncodeInputs.SUBMITTED_TEXT_PATH]
 
 
 def _file_uploader() -> Path | None:
@@ -140,12 +142,12 @@ def _file_uploader() -> Path | None:
 
         # Let the user know uploading will throw away the text they already submitted if we have some (the uploader
         #   already shows an error if the last file was not valid, so no need to show this too)
-        if Inputs.SUBMITTED_TEXT_PATH in st.session_state and Inputs.UPLOAD_ERROR not in st.session_state:
+        if EncodeInputs.SUBMITTED_TEXT_PATH in st.session_state and EncodeInputs.UPLOAD_ERROR not in st.session_state:
             st.warning("Currently using your submitted text. Uploading a file will replace it.")
 
         return None
 
-    st.success(f"File uploaded successfully! Using {st.session_state[Inputs.UPLOAD_FILE_NAME]} for encoding.")
+    st.success(f"File uploaded successfully! Using {st.session_state[EncodeInputs.UPLOAD_FILE_NAME]} for encoding.")
 
     return in_path
 
@@ -160,19 +162,23 @@ def show_input_settings() -> Path | None:
     # Now show to the user the option to choose between file upload and text area input
     input_method = st.segmented_control(
         label="Choose an input method:",
-        options=[Inputs.FILE_UPLOAD, Inputs.TEXT_INPUT],
-        default=Inputs.FILE_UPLOAD,                # Default to file upload
-        required=True                       # Must be either one
+        options=[EncodeInputs.FILE_UPLOAD, EncodeInputs.TEXT_INPUT],
+        default=EncodeInputs.FILE_UPLOAD,                # Default to file upload
+        required=True,                      # Must be either one
+        key="encode_input_method",
+        # Otherwise it goes back to file upload when the page is opened again, which looks like the input changed and
+        #   throws away the last run
+        persist_state="session",
     )
 
     # What to show based on the input method selected. Either way we end up with a path to encode, or None if the user
     #   has not given us anything valid yet.
     in_path: Path | None = None
     # User wants to upload a file
-    if input_method == Inputs.FILE_UPLOAD:
+    if input_method == EncodeInputs.FILE_UPLOAD:
         in_path = _file_uploader()
     # User wants a text box
-    elif input_method == Inputs.TEXT_INPUT:
+    elif input_method == EncodeInputs.TEXT_INPUT:
         in_path = _area_input()
 
     return in_path
@@ -393,25 +399,6 @@ PRIMER_DEFAULT: Final[str] = "ACGTACGT"
 OVERHEAD_MARGIN_DEFAULT: Final[float] = 0.1
 
 
-def _clean_primer(primer: str) -> str | None:
-    """
-    Cleans up a primer the user typed, so lowercase and spaces are fine.
-
-    Args:
-        primer: The primer as typed.
-
-    Returns:
-        The primer in uppercase with no spaces, or None if it has anything other than A, C, G, and T.
-    """
-    primer = primer.replace(" ", "").upper()
-
-    # Only bases allowed - an empty primer is fine, the framer just leaves it off
-    if not set(primer) <= Encoding.DNA_BASES:
-        return None
-
-    return primer
-
-
 def show_oligo_settings() -> tuple[int, str | None, str | None, float]:
     """
     Settings for the oligo itself - how long it is, the primers on each end, and how much room to leave for the index.
@@ -449,8 +436,8 @@ def show_oligo_settings() -> tuple[int, str | None, str | None, float]:
         persist_state="session",
     )
 
-    start_primer: str | None = _clean_primer(start_primer_text)
-    end_primer: str | None = _clean_primer(end_primer_text)
+    start_primer: str | None = clean_primer(start_primer_text)
+    end_primer: str | None = clean_primer(end_primer_text)
 
     # Let the user know right away if a primer is wrong, instead of when they press encode
     if start_primer is None:
@@ -657,7 +644,7 @@ OUTER_CODES: Final[list[OuterCodeNames]] = [
 OUTER_CODE_DESCRIPTIONS: Final[dict[OuterCodeNames, str]] = {
     OuterCodeNames.NONE: "No outer error correction code is used, so a lost oligo stays lost.",
     OuterCodeNames.GOLDMAN_REDUNDANCY: "Four quarter shifted copies of the payload, so every quarter shows up in"
-                                        " four different oligos. Simple, but takes about four times the oligos.",
+                                       " four different oligos. Simple, but takes about four times the oligos.",
     OuterCodeNames.XOR: "Adds one parity oligo for every two payload oligos, so one lost oligo in each block of"
                         " three can be rebuilt.",
     OuterCodeNames.REED_SOLOMON: "Adds parity oligos across all the oligos, so lost oligos can be rebuilt as"
@@ -728,7 +715,7 @@ def show_outer_correction_settings(is_homopolymer_free: bool) -> OuterCodes | No
 
 
 # Session state keys for the last run
-class ResultKeys(StrEnum):
+class EncodeResultKeys(StrEnum):
     IN_PATH = "encoded_in_path"
     FRAMER = "framer"
     ORIGINAL_SIZE = "original_size"
@@ -764,11 +751,11 @@ def encode(in_path: Path,
         outer_codes: The outer error correction code to use, or None for no outer code.
     """
     # Forget the last run first, so an error never shows next to old results
-    for key in ResultKeys:
+    for key in EncodeResultKeys:
         st.session_state.pop(key, None)
 
     # Remember which input these results are for, so they are hidden if the user removes or changes the input
-    st.session_state[ResultKeys.IN_PATH] = in_path
+    st.session_state[EncodeResultKeys.IN_PATH] = in_path
 
     # The indexer and checksum are built here, each run needs its own new indexer as the framer changes its width
     indexer_type: type[Indexer] = indexer[0]
@@ -798,22 +785,26 @@ def encode(in_path: Path,
         framer.frame_all_oligos()
 
         # Save the framer to a JSON file now, so it can be downloaded for the decode page
-        json_path: Path = Path(mkdtemp(prefix="dna_codec_")) / f"{Path(in_path).stem}_framed.json"
+        json_path: Path = Path(mkdtemp(prefix="dna_codec_")) / f"{Path(in_path).stem}-framed.json"
         Serializer.save_framer(framer, str(json_path))
 
     # A setting the config doesn't accept
     except ValidationError as error:
-        st.session_state[ResultKeys.ERROR] = f"A setting is not valid: {error.errors()[0]['msg']}"
+        st.session_state[EncodeResultKeys.ERROR] = f"A setting is not valid: {error.errors()[0]['msg']}"
         return
     
     # Our own errors (e.g. oligo too short for the payload) or anything else the framer hits
     except (Error, ValueError) as error:
-        st.session_state[ResultKeys.ERROR] = f"{type(error).__name__}: {error}"
+        st.session_state[EncodeResultKeys.ERROR] = f"{type(error).__name__}: {error}"
         return
 
-    st.session_state[ResultKeys.FRAMER] = framer
-    st.session_state[ResultKeys.ORIGINAL_SIZE] = Path(in_path).stat().st_size * 8      # Bytes to bits
-    st.session_state[ResultKeys.JSON] = json_path
+    st.session_state[EncodeResultKeys.FRAMER] = framer
+    st.session_state[EncodeResultKeys.ORIGINAL_SIZE] = Path(in_path).stat().st_size * 8      # Bytes to bits
+    st.session_state[EncodeResultKeys.JSON] = json_path
+
+    # Set once here instead of every time the results are drawn, so a later page (e.g. clustering) can swap in its own
+    #   JSON without this page putting the old one back
+    st.session_state[ViewHelpers.ENCODED_JSON_PATH_KEY] = json_path
 
 
 def show_oligo_layout(framer: OligoFramer) -> None:
@@ -884,8 +875,14 @@ def show_info(framer: OligoFramer, original_size: int) -> None:
     # Already have a nice stats class to figure this stuff out for us, so just use it
     stats: EncodingStats = EncodingStats(config.encoder, bodies, framer.huffman_codes, RUN_LENGTH_K)
 
-    # Main numbers up top, one per column - all the important things a user would want to know at a glance.
+    # Main numbers up top, one per column - all the important things a user would want to know at a glance. Idk types 
+    #   for columns, at least I cant find the import from st from them. So just using Any. I'm cursed with strong typing
+    oligos_column: Any
+    bits_column: Any
+    gc_column: Any
+    runs_column: Any
     oligos_column, bits_column, gc_column, runs_column = st.columns(4)
+
     oligos_column.metric(
         label="Oligos",
         value=f"{config.num_oligos:,}",
@@ -907,6 +904,8 @@ def show_info(framer: OligoFramer, original_size: int) -> None:
     )
 
     # Now show the components and sizes in two columns, so they are side by side.
+    components_column: Any
+    size_column: Any
     components_column, size_column = st.columns(2)
     with components_column:
         st.markdown(
@@ -937,7 +936,7 @@ def show_info(framer: OligoFramer, original_size: int) -> None:
         # The original size is in bits, the rest are in bases
         sizes: dict[str, str] = {
             "Original size": f"{original_size:,} bits",
-            "With primers": f"{total_bases:,} bases ({original_size / total_bases:.3f} bits/base)",
+            "With primers": f"{total_bases:,} bases ({original_size / total_bases:.3f} effective bits/base)",
             "Without primers": f"{stats.num_bases:,} bases",
         }
         table = pd.DataFrame({"Size": sizes.values()}, index=list(sizes.keys()))
@@ -972,7 +971,7 @@ def show_downloads(framer: OligoFramer, json_path: Path) -> None:
             label="Download oligos (.txt)",
             help="The oligos, one per line. Cannot be uploaded on the decode page.",
             data="\n".join(framer.framed_oligos) + "\n",
-            file_name=f"{json_path.stem.removesuffix('_framed')}_oligos.txt",   # Little hacky but atp idc
+            file_name=f"{json_path.stem.removesuffix('-framed')}-oligos.txt",   # Little hacky but atp idc
             mime="text/plain",
             icon=":material/download:",
         )
@@ -1007,6 +1006,9 @@ in_path: Path | None = show_input_settings()
 st.subheader("Settings", divider="gray")
 
 # Three columns - encoder and indexer on the left, the oligo in the middle, and the error correction on the right
+encoder_column: Any
+oligo_column: Any
+correction_column: Any
 encoder_column, oligo_column, correction_column = st.columns(3)
 
 # First column is encoder and indexer settings (on top of each other)
@@ -1065,23 +1067,24 @@ if st.button("Encode", type="primary", disabled=not ready):
             )
 
 # Only show results for the input currently picked, so they disappear if the file is removed or the input changes
-if st.session_state.get(ResultKeys.IN_PATH, None) == in_path:
+if st.session_state.get(EncodeResultKeys.IN_PATH, None) == in_path:
     # If There was an error show
-    if ResultKeys.ERROR in st.session_state:
-        st.error(f"Encoding failed. {st.session_state[ResultKeys.ERROR]}")
+    if EncodeResultKeys.ERROR in st.session_state:
+        st.error(f"Encoding failed. {st.session_state[EncodeResultKeys.ERROR]}")
 
     # Everything was great - show that it succeeded and add a subsection for downloading results
-    if ResultKeys.FRAMER in st.session_state:
+    if EncodeResultKeys.FRAMER in st.session_state:
         st.success("Encoded successfully!")
 
         # Show results and downloads
-        show_oligo_layout(st.session_state[ResultKeys.FRAMER])
-        show_info(st.session_state[ResultKeys.FRAMER], st.session_state[ResultKeys.ORIGINAL_SIZE])
-        show_downloads(st.session_state[ResultKeys.FRAMER], st.session_state[ResultKeys.JSON])
+        show_oligo_layout(st.session_state[EncodeResultKeys.FRAMER])
+        show_info(st.session_state[EncodeResultKeys.FRAMER], st.session_state[EncodeResultKeys.ORIGINAL_SIZE])
+        show_downloads(st.session_state[EncodeResultKeys.FRAMER], st.session_state[EncodeResultKeys.JSON])
 
-        # Store the last run's json path in session state
-        st.session_state[ViewHelpers.ENCODED_JSON_PATH_KEY] = st.session_state.get(ResultKeys.JSON, None)
-
-# Results are hidden, so the other pages shouldn't keep using oligos for an input that is no longer picked
+# The input changed since the last run, so the other pages shouldn't keep using oligos for an input that is no longer
+#   picked. Forget the old run too, so this only happens once - otherwise a JSON made later on another page (e.g. the
+#   consensus strands) would be thrown away every time this page is opened
 else:
+    for key in EncodeResultKeys:
+        st.session_state.pop(key, None)
     st.session_state.pop(ViewHelpers.ENCODED_JSON_PATH_KEY, None)

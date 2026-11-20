@@ -17,8 +17,9 @@ constructor arguments from its get_spec_args method. Components are saved under 
 
 from pathlib import Path
 from typing import Annotated, Any, Final, Literal
+
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt
-from pydantic.dataclasses import dataclass
+
 from Model.Helpers.Errors import NotInRegistryError
 from Model.Encode.OligoFramer import FramerConfig, OligoDeframer, OligoFramer, Primer
 from Model.Encode.Methods.Encoding import Encoding
@@ -481,6 +482,117 @@ class Serializer:
             content_length=saved.content_length,
             content_hash=saved.content_hash
         )
+
+
+    @staticmethod
+    def load_framed_oligos(json_path: str) -> list[str]:
+        """
+        Gets just the framed oligos from a JSON file saved by save_framer, without rebuilding the deframer. Used when
+        only the strands are needed (e.g. clustering), not how to decode them.
+
+        Args:
+            json_path: The path to the JSON file.
+
+        Returns:
+            The framed oligos saved in the file.
+
+        Raises:
+            FileNotFoundError: If the JSON file does not exist.
+            ValidationError: If the file is not valid JSON, not a framer file, or has anything missing, extra, or
+                invalid.
+        """
+        # Same check as load_deframer, the whole file in one go
+        json_content: str = Path(json_path).read_text(encoding='utf-8')
+        saved: SavedFramer = SavedFramer.model_validate_json(json_content)
+
+        return saved.framed_oligos
+
+
+    @staticmethod
+    def load_primers(json_path: str) -> tuple[str, str]:
+        """
+        Gets just the start and end primers from a JSON file saved by save_framer, without rebuilding the deframer.
+
+        Args:
+            json_path: The path to the JSON file.
+
+        Returns:
+            The start and end primer, empty if the file has no primer on that end.
+
+        Raises:
+            FileNotFoundError: If the JSON file does not exist.
+            ValidationError: If the file is not valid JSON, not a framer file, or has anything missing, extra, or
+                invalid.
+        """
+        json_content: str = Path(json_path).read_text(encoding='utf-8')
+        saved: SavedFramer = SavedFramer.model_validate_json(json_content)
+
+        # Config is saved from FramerConfig's model_dump, so its keys are the field names. Empty if left out, same as
+        #   FramerConfig's default
+        start_primer: str = saved.config.get("start_primer", "")
+        end_primer: str = saved.config.get("end_primer", "")
+
+        return start_primer, end_primer
+
+
+    @staticmethod
+    def save_with_added_oligos(json_path: str, oligos: list[str], out_path: str) -> None:
+        """
+        Saves a copy of a JSON file saved by save_framer, with new oligos (e.g. the consensus strands after clustering)
+        added after its framed oligos. The old oligos are kept, and everything else is kept as is, so the copy decodes
+        the same way - the deframer keeps the first valid copy of each index, so extra copies are fine.
+
+        Args:
+            json_path: The path to the JSON file to copy.
+            oligos: The oligos to add after the old ones.
+            out_path: The path to the output JSON file. Parent directories are created if needed.
+
+        Raises:
+            FileNotFoundError: If the JSON file does not exist, or the output path is invalid.
+            ValidationError: If the file is not a valid framer file, or a new oligo isn't only bases.
+        """
+        json_content: str = Path(json_path).read_text(encoding='utf-8')
+        saved: SavedFramer = SavedFramer.model_validate_json(json_content)
+
+        # Building a new model checks the new oligos too, same as save_framer - assigning to saved wouldn't
+        save: SavedFramer = SavedFramer(
+            filename=saved.filename,
+            content_length=saved.content_length,
+            content_hash=saved.content_hash,
+            config=saved.config,
+            huffman_codes=saved.huffman_codes,
+            framed_oligos=saved.framed_oligos + oligos
+        )
+
+        Serializer._write_json(save, out_path)
+
+
+    @staticmethod
+    def load_segments_from_text(in_path: str) -> list[str]:
+        """
+        Loads a list of segments from a text file - one segment per line, same format as save_segments_to_text. Blank
+        lines are skipped.
+
+        Args:
+            in_path: The path to the text file.
+
+        Returns:
+            The segments in the file, in order.
+
+        Raises:
+            FileNotFoundError: If the text file does not exist.
+            UnicodeDecodeError: If the file is not valid UTF-8 text.
+        """
+        segments: list[str] = []
+        with open(in_path, 'r', encoding='utf-8') as in_file:
+            for line in in_file:
+                line = line.strip()
+
+                # Trailing newline (or any blank line) isn't a segment
+                if line:
+                    segments.append(line)
+
+        return segments
 
 
     @staticmethod

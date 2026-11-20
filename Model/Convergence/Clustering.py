@@ -14,7 +14,6 @@ import math
 
 # edlib is a C++ library for edit distance, way faster than anything I could write
 import edlib
-
 # Same as the other configs - pydantic does all the validation for us, even after a user changes a field
 from pydantic import BaseModel, ConfigDict, PositiveInt
 
