@@ -27,7 +27,7 @@ from Model.Convergence.Clustering import Clustering
 
 # POA alignment types, from the spoa library. 0 = local (Smith-Waterman), 1 = global (Needleman-Wunsch), 2 = semi-global
 #   (overlap). spoa throws "invalid alignment type" for anything else
-Alignment = Literal[0, 1, 2]
+type Alignment = Literal[0, 1, 2]
 
 
 

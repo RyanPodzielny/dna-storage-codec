@@ -207,6 +207,9 @@ class ErrorConfig(BaseModel):
     # Allows to repeat same simulation with random numbers - none means different random numbers every time
     seed: int | None = None
 
+    # To allow user to turn off stages of the simulation, e.g. turning off aging
+    enabled: bool = True
+
     # Turns on everything other than the three rates. When False the simulator ignores the advanced settings. We keep
     #   the advanced settings valid even when advanced is off, so it will be able to store/load without breaking them.
     advanced_mode: bool = False

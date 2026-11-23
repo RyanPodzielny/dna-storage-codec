@@ -1265,7 +1265,8 @@ class ErrorSimulator:
 
         for _, config in self.stages:
             # Apply our errors
-            indices, sequences = self._apply_stage(indices, sequences, config)
+            if config.enabled:
+                indices, sequences = self._apply_stage(indices, sequences, config)
 
             # Shuffle everything up after each stage. Shuffle one order and apply it to both, so the indices stay lock
             #   step with the strands and every error is still recorded against the right original strand

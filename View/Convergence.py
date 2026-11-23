@@ -20,8 +20,7 @@ from Model.Encode.Methods.Encoding import Encoding
 from Model.Helpers.Errors import Error
 from Model.Serialize.EncoderSerializer import Serializer
 from View.Helpers import ViewHelpers
-from View.Helpers.ViewHelpers import UploadKeys, clean_primer, file_uploader, is_deframer, slider_with_input, \
-    text_is_oligos
+from View.Helpers.ViewHelpers import UploadKeys, clean_primer, slider_with_input, show_input_settings
 
 
 #------------------------------------------------------------------------------#
@@ -64,92 +63,6 @@ TEXT_UPLOAD_KEYS: Final[UploadKeys] = UploadKeys(
     path=ConvergenceInputs.TEXT_FILE_PATH,
     error=ConvergenceInputs.TEXT_UPLOAD_ERROR,
 )
-
-
-def _framer_file_uploader() -> Path | None:
-    """
-    Upload a JSON file saved from the Encoding page. The file is kept in session state, so it is still used after
-    switching to text upload and back.
-
-    Returns:
-        The path to the temporary file containing the uploaded file's contents, or None if there is no valid file.
-    """
-    uploaded_json_path: Path | None = file_uploader(
-        label="Upload a JSON file saved from the Encoding page to cluster:",
-        keys=JSON_UPLOAD_KEYS,
-        error_message="is not a valid encoded JSON file. Please upload a JSON file saved from the Encoding page.",
-        file_type="json",                   # Only the JSON files saved by the encoder
-        is_valid=is_deframer,               # Only valid if it loads as a deframer
-    )
-    return uploaded_json_path
-
-
-def _text_file_uploader() -> Path | None:
-    """
-    Upload a text file of oligos, one per line. Same as the JSON uploader, the file is kept in session state.
-
-    Returns:
-        The path to the temporary file containing the uploaded file's contents, or None if there is no valid file.
-    """
-    uploaded_text_path: Path | None = file_uploader(
-        label="Upload a text file containing oligos separated by newlines:",
-        keys=TEXT_UPLOAD_KEYS,
-        error_message="is not a valid encoded oligo file. Please upload a file that contains only nucleotides.",
-        file_type=["txt", "text"],          # Same format as the oligos download on the Encoding page
-        is_valid=text_is_oligos,            # Only valid if every line is only bases
-    )
-    return uploaded_text_path
-
-
-# TODO: this will need to be put in shared module - we will use it for simulation page
-def show_input_settings() -> tuple[Path | None, bool]:
-    """
-    Show the input settings to the user. An uploaded file overrides the oligos encoded earlier in the session.
-
-    Returns:
-        The path to the file to cluster (None if there is no valid input yet), and whether it is a JSON file saved
-        from the Encoding page (False if it is a text file of oligos).
-    """
-    # Now show to the user the option to choose between JSON upload and text upload
-    input_method = st.segmented_control(
-        label="Choose an input method:",
-        options=[ConvergenceInputs.JSON_UPLOAD, ConvergenceInputs.TEXT_UPLOAD],
-        default=ConvergenceInputs.JSON_UPLOAD,                # Default to JSON upload
-        required=True,                      # Must be either one
-        key="convergence_input_method",
-        persist_state="session",            # Keep the picked method when the page is opened again
-    )
-
-    # What to show based on the input method selected. Either way we end up with a path to cluster, or None if the user
-    #   has not given us anything valid yet.
-    in_path: Path | None = None
-    keys: UploadKeys = JSON_UPLOAD_KEYS
-    # User wants to upload a JSON file
-    if input_method == ConvergenceInputs.JSON_UPLOAD:
-        in_path = _framer_file_uploader()
-    # User wants to upload a text file
-    elif input_method == ConvergenceInputs.TEXT_UPLOAD:
-        in_path = _text_file_uploader()
-        keys = TEXT_UPLOAD_KEYS
-
-    # The last run on the Encoding page, or None if the user hasn't encoded anything yet
-    encoded_json_path: Path | None = st.session_state.get(ViewHelpers.ENCODED_JSON_PATH_KEY, None)
-
-    # Uploaded file always wins - let the user know if it is overriding what they encoded
-    if in_path is not None:
-        # Change to the uploaded file, and let user know
-        st.success(f"File uploaded successfully! Using {st.session_state[keys.name]} for clustering and consensus.")
-        return in_path, input_method == ConvergenceInputs.JSON_UPLOAD
-
-    # No upload, so use the latest oligos from the session (Encoding page, or the last consensus run) - warning that
-    #   uploading will override them (the uploader already shows an error if the last file was not valid, so no need to
-    #   show this too)
-    if encoded_json_path is not None and keys.error not in st.session_state:
-        st.warning(f"Currently using the latest oligos from this session ({Path(encoded_json_path).name}). Uploading a"
-                   f" file will override them.")
-
-    # Encoding page always saves a JSON
-    return encoded_json_path, True
 
 
 
@@ -624,7 +537,7 @@ st.subheader("Input", divider="gray")
 # Where the file to cluster can be found - or None if nothing valid yet
 in_path: Path | None
 is_json: bool
-in_path, is_json = show_input_settings()
+in_path, is_json = show_input_settings("convergence_input_method", JSON_UPLOAD_KEYS, TEXT_UPLOAD_KEYS)
 
 
 # Settings section

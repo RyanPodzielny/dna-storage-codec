@@ -4,9 +4,10 @@ session state. These are used in multiple places, so they are kept here to avoid
 """
 
 
+from enum import StrEnum
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Any, Callable, TypeVar
+from typing import Annotated, Any, Callable, TypeVar
 
 import streamlit as st
 from streamlit.runtime.uploaded_file_manager import UploadedFile
@@ -29,8 +30,17 @@ from Model.Serialize.EncoderSerializer import Serializer
 #   path to the newly encoded JSON file, where we can use in simulation, clustering and decoding.
 ENCODED_JSON_PATH_KEY: str = "encoded_json_path"
 
-# A slider with an input works on either ints or floats, but every number given to one has to be the same type
+# A slider with an input works on either ints or floats, but every number given to one has to be the same type. Would 
+#   be nice if we could jsut do type Number = int | float, but typing check throws a fit since it doesnt implicit cast.
+#   Kinda stupid so we are stuck with TypeVars
 Number = TypeVar("Number", int, float)
+
+
+class HelperInputs(StrEnum):
+    # Need to make these keys as Streamlit doesn't keep the text_input box written, when user switches. Just easier.
+    JSON_UPLOAD = "JSON Upload"
+    TEXT_UPLOAD = "Raw Oligo Upload"
+
 
 
 # Just using pydantic instead of dataclass to keep it consistent with everything else
@@ -50,10 +60,73 @@ class UploadKeys(BaseModel):
 
 #------------------------------------------------------------------------------#
 #                                                                              #
-#   HELPER FUNCTIONS                                                           #
+#   PRIVATE HELPER FUNCTIONS                                                   #
 #                                                                              #
 #------------------------------------------------------------------------------#
 
+
+
+def _framer_file_uploader(json_keys: UploadKeys) -> Path | None:
+    """
+    Upload a JSON file saved from the Encoding page. The file is kept in session state, so it is still used after
+    switching to text upload and back.
+
+    Returns:
+        The path to the temporary file containing the uploaded file's contents, or None if there is no valid file.
+    """
+    uploaded_json_path: Path | None = file_uploader(
+        label="Upload a JSON file saved from the Encoding page:",
+        keys=json_keys,
+        error_message="is not a valid encoded JSON file. Please upload a JSON file saved from the Encoding page.",
+        file_type="json",                   # Only the JSON files saved by the encoder
+        is_valid=is_deframer,               # Only valid if it loads as a deframer
+    )
+    return uploaded_json_path
+
+
+def _text_file_uploader(text_keys: UploadKeys) -> Path | None:
+    """
+    Upload a text file of oligos, one per line. Same as the JSON uploader, the file is kept in session state.
+
+    Returns:
+        The path to the temporary file containing the uploaded file's contents, or None if there is no valid file.
+    """
+    uploaded_text_path: Path | None = file_uploader(
+        label="Upload a text file containing oligos separated by newlines:",
+        keys=text_keys,
+        error_message="is not a valid encoded oligo file. Please upload a file that contains only nucleotides.",
+        file_type=["txt", "text"],          # Same format as the oligos download on the Encoding page
+        is_valid=text_is_oligos,            # Only valid if every line is only bases
+    )
+    return uploaded_text_path
+
+
+
+#------------------------------------------------------------------------------#
+#                                                                              #
+#   PUBLIC HELPER FUNCTIONS                                                    #
+#                                                                              #
+#------------------------------------------------------------------------------#
+
+
+
+def clean_primer(primer: str) -> str | None:
+    """
+    Cleans up a primer the user typed, so lowercase and spaces are fine.
+
+    Args:
+        primer: The primer as typed.
+
+    Returns:
+        The primer in uppercase with no spaces, or None if it has anything other than A, C, G, and T.
+    """
+    primer = primer.replace(" ", "").upper()
+
+    # Only bases allowed - an empty primer is fine, it just means no primer
+    if not set(primer) <= Encoding.DNA_BASES:
+        return None
+
+    return primer
 
 
 def text_is_oligos(in_path: Path) -> bool:
@@ -101,25 +174,6 @@ def is_deframer(json_path: Path) -> bool:
         return False
 
     return True
-
-
-def clean_primer(primer: str) -> str | None:
-    """
-    Cleans up a primer the user typed, so lowercase and spaces are fine.
-
-    Args:
-        primer: The primer as typed.
-
-    Returns:
-        The primer in uppercase with no spaces, or None if it has anything other than A, C, G, and T.
-    """
-    primer = primer.replace(" ", "").upper()
-
-    # Only bases allowed - an empty primer is fine, it just means no primer
-    if not set(primer) <= Encoding.DNA_BASES:
-        return None
-
-    return primer
 
 
 def contents_to_file(contents: str, filename: str) -> Path:
@@ -206,6 +260,26 @@ def store_upload(keys: UploadKeys,
     st.session_state[keys.path] = file_path
 
 
+def sync_widget(source_key: str, target_key: str) -> None:
+    """
+    Callback to copy one widget's value into another, so a slider and number input always show the same thing.
+
+    Args:
+        source_key: The key of the widget the user just changed.
+        target_key: The key of the widget to update.
+    """
+    st.session_state[target_key] = st.session_state[source_key]
+
+
+
+#------------------------------------------------------------------------------#
+#                                                                              #
+#   UI HELPER FUNCTIONS                                                        #
+#                                                                              #
+#------------------------------------------------------------------------------#
+
+
+
 def file_uploader(label: str,
                   keys: UploadKeys,
                   error_message: str,
@@ -260,17 +334,6 @@ def file_uploader(label: str,
 
     # Path to our copy, or None if nothing is uploaded yet (or it was removed)
     return st.session_state.get(keys.path, None)
-
-
-def sync_widget(source_key: str, target_key: str) -> None:
-    """
-    Callback to copy one widget's value into another, so a slider and number input always show the same thing.
-
-    Args:
-        source_key: The key of the widget the user just changed.
-        target_key: The key of the widget to update.
-    """
-    st.session_state[target_key] = st.session_state[source_key]
 
 
 def slider_with_input(label: str,
@@ -343,3 +406,58 @@ def slider_with_input(label: str,
         )
 
     return value
+
+
+def show_input_settings(control_key: str, json_keys: UploadKeys, text_keys: UploadKeys) -> tuple[Path | None, bool]:
+    """
+    Show the input settings to the user. An uploaded file overrides the oligos encoded earlier in the session.
+
+    Arsgs:
+        control_key: The key for the segmented control, so it keeps its value when the page is opened again.
+        json_keys: The session state keys of the JSON uploader.
+        text_keys: The session state keys of the text uploader.
+
+    Returns:
+        The path to the file to use (None if there is no valid input yet), and whether it is a JSON file saved
+        from the Encoding page (False if it is a text file of oligos).
+    """
+    # Now show to the user the option to choose between JSON upload and text upload
+    input_method = st.segmented_control(
+        label="Choose an input method:",
+        options=[HelperInputs.JSON_UPLOAD, HelperInputs.TEXT_UPLOAD],
+        default=HelperInputs.JSON_UPLOAD,                # Default to JSON upload
+        required=True,                      # Must be either one
+        key=control_key,
+        persist_state="session",            # Keep the picked method when the page is opened again
+    )
+
+    # What to show based on the input method selected. Either way we end up with a path to cluster, or None if the user
+    #   has not given us anything valid yet.
+    in_path: Path | None = None
+    keys: UploadKeys = json_keys
+    # User wants to upload a JSON file
+    if input_method == HelperInputs.JSON_UPLOAD:
+        in_path = _framer_file_uploader(json_keys)
+    # User wants to upload a text file
+    elif input_method == HelperInputs.TEXT_UPLOAD:
+        in_path = _text_file_uploader(text_keys)
+        keys = text_keys
+
+    # The last run on the Encoding page, or None if the user hasn't encoded anything yet
+    encoded_json_path: Path | None = st.session_state.get(ENCODED_JSON_PATH_KEY, None)
+
+    # Uploaded file always wins - let the user know if it is overriding what they encoded
+    if in_path is not None:
+        # Change to the uploaded file, and let user know
+        st.success(f"File uploaded successfully! Using {st.session_state[keys.name]} for clustering and consensus.")
+        return in_path, input_method == HelperInputs.JSON_UPLOAD
+
+    # No upload, so use the latest oligos from the session (Encoding page, or the last consensus run) - warning that
+    #   uploading will override them (the uploader already shows an error if the last file was not valid, so no need to
+    #   show this too)
+    if encoded_json_path is not None and keys.error not in st.session_state:
+        st.warning(f"Currently using the latest oligos from this session ({Path(encoded_json_path).name}). Uploading a"
+                   f" file will override them.")
+
+    # Encoding page always saves a JSON
+    return encoded_json_path, True
