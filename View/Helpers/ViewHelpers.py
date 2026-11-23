@@ -7,7 +7,7 @@ session state. These are used in multiple places, so they are kept here to avoid
 from enum import StrEnum
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Annotated, Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar
 
 import streamlit as st
 from streamlit.runtime.uploaded_file_manager import UploadedFile
@@ -461,3 +461,62 @@ def show_input_settings(control_key: str, json_keys: UploadKeys, text_keys: Uplo
 
     # Encoding page always saves a JSON
     return encoded_json_path, True
+
+
+
+def show_downloads(in_path: Path,
+                   strands: list[str], 
+                   json_path: Path | None, 
+                   json_help: str, 
+                   strand_help: str, 
+                   suffix: str,
+                   error_path: Path | None = None,
+                   error_help: str | None = None) -> None:
+    """
+    Shows the download buttons for the consensus strands as a text file, and the JSON with them in it if the input
+    was a JSON file.
+
+    Args:
+        in_path: The path to the input, used to name the downloads.
+        strands: The consensus strand of every cluster.
+        json_path: The path to the JSON file with the consensus strands, or None if the input was a text file.
+        json_help: The help text for the JSON download button.
+        strand_help: The help text for the strands download button.
+        error_path: The path to the JSON file with the errors, or None if there are no errors.
+        error_help: The help text for the errors download button.
+    """
+    st.subheader("Download", divider="gray")
+
+    # Downloads right next to each other - a horizontal container puts them in a row without spreading them out like
+    #   columns do
+    with st.container(horizontal=True):
+        # Only a JSON input has settings to put the strands back in to
+        if json_path is not None:
+            st.download_button(
+                label="Download settings (.json)",
+                help=json_help,
+                data=json_path.read_bytes(),
+                file_name=json_path.name,
+                mime="application/json",
+                icon=":material/download:",
+            )
+
+        # One strand per line, same format as Serializer.save_segments_to_text, so it can be uploaded on the other pages
+        st.download_button(
+            label="Download strands (.txt)",
+            help=strand_help,
+            data="\n".join(strands) + "\n",
+            file_name=f"{in_path.stem}-{suffix}.txt",
+            mime="text/plain",
+            icon=":material/download:",
+        )
+
+        if error_path is not None:
+            st.download_button(
+                label="Download errors (.json)",
+                help=error_help,
+                data=error_path.read_bytes(),
+                file_name=error_path.name,
+                mime="application/json",
+                icon=":material/download:",
+            )

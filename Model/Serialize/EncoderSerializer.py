@@ -315,6 +315,34 @@ class Serializer:
 
 
     @staticmethod
+    def _save_with_oligos(saved: SavedFramer, oligos: list[str], out_path: str) -> None:
+        """
+        Saves a copy of a loaded framer file with its framed oligos swapped for the ones given. Everything else is kept
+        as is, so the copy still decodes the same way. Shared by save_with_added_oligos and save_with_replaced_oligos.
+
+        Args:
+            saved: The framer file already loaded.
+            oligos: The framed oligos the copy has.
+            out_path: The path to the output JSON file. Parent directories are created if needed.
+
+        Raises:
+            FileNotFoundError: If the output path is invalid.
+            ValidationError: If an oligo isn't only bases.
+        """
+        # Building a new model checks the new oligos too, same as save_framer - assigning to saved wouldn't
+        save: SavedFramer = SavedFramer(
+            filename=saved.filename,
+            content_length=saved.content_length,
+            content_hash=saved.content_hash,
+            config=saved.config,
+            huffman_codes=saved.huffman_codes,
+            framed_oligos=oligos
+        )
+
+        Serializer._write_json(save, out_path)
+
+
+    @staticmethod
     def _config_to_dict(config: FramerConfig) -> dict[str, Any]:
         """
         Converts a config to a dictionary that can be written to a JSON file. Plain settings come straight from the
@@ -554,17 +582,30 @@ class Serializer:
         json_content: str = Path(json_path).read_text(encoding='utf-8')
         saved: SavedFramer = SavedFramer.model_validate_json(json_content)
 
-        # Building a new model checks the new oligos too, same as save_framer - assigning to saved wouldn't
-        save: SavedFramer = SavedFramer(
-            filename=saved.filename,
-            content_length=saved.content_length,
-            content_hash=saved.content_hash,
-            config=saved.config,
-            huffman_codes=saved.huffman_codes,
-            framed_oligos=saved.framed_oligos + oligos
-        )
+        # Old oligos first, then the new ones after
+        Serializer._save_with_oligos(saved, saved.framed_oligos + oligos, out_path)
 
-        Serializer._write_json(save, out_path)
+
+    @staticmethod
+    def save_with_replaced_oligos(json_path: str, oligos: list[str], out_path: str) -> None:
+        """
+        Saves a copy of a JSON file saved by save_framer, with all of its framed oligos replaced by new ones (e.g. the
+        reads after simulating errors). Everything else is kept as is, so the copy still decodes the same way.
+
+        Args:
+            json_path: The path to the JSON file to copy.
+            oligos: The oligos to replace the old ones with.
+            out_path: The path to the output JSON file. Parent directories are created if needed.
+
+        Raises:
+            FileNotFoundError: If the JSON file does not exist, or the output path is invalid.
+            ValidationError: If the file is not a valid framer file, or a new oligo isn't only bases.
+        """
+        json_content: str = Path(json_path).read_text(encoding='utf-8')
+        saved: SavedFramer = SavedFramer.model_validate_json(json_content)
+
+        # None of the old oligos are kept
+        Serializer._save_with_oligos(saved, oligos, out_path)
 
 
     @staticmethod

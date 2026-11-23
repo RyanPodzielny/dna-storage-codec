@@ -25,7 +25,7 @@ from Model.Helpers.Errors import Error
 from Model.Serialize.EncoderSerializer import Serializer
 from View.Helpers import ViewHelpers
 from View.Helpers.ViewHelpers import UploadKeys, clean_primer, clear_upload, contents_to_file, file_uploader, \
-    slider_with_input
+    slider_with_input, show_downloads
 
 
 #------------------------------------------------------------------------------#
@@ -944,39 +944,6 @@ def show_info(framer: OligoFramer, original_size: int) -> None:
         st.table(table)
 
 
-def show_downloads(framer: OligoFramer, json_path: Path) -> None:
-    """
-    Shows the download buttons for the framer JSON and the oligos text file.
-
-    Args:
-        framer: The framer after frame_all_oligos.
-        json_path: The path to the JSON file with the framer.
-    """
-    st.subheader("Download", divider="gray")
-
-    # Downloads right next to each other - a horizontal container puts them in a row without spreading them out like
-    #   columns do. The JSON is what the decode page needs, the text file is just the oligos
-    with st.container(horizontal=True):
-        st.download_button(
-            label="Download settings (.json)",
-            help="Needed on the decode page to decode the oligos.",
-            data=json_path.read_bytes(),
-            file_name=json_path.name,
-            mime="application/json",
-            icon=":material/download:",
-        )
-
-        # One oligo per line, same format as Serializer.save_segments_to_text, so it can be uploaded on the other pages
-        st.download_button(
-            label="Download oligos (.txt)",
-            help="The oligos, one per line. Cannot be uploaded on the decode page.",
-            data="\n".join(framer.framed_oligos) + "\n",
-            file_name=f"{json_path.stem.removesuffix('-framed')}-oligos.txt",   # Little hacky but atp idc
-            mime="text/plain",
-            icon=":material/download:",
-        )
-
-
 
 #------------------------------------------------------------------------------#
 #                                                                              #
@@ -1073,13 +1040,20 @@ if st.session_state.get(EncodeResultKeys.IN_PATH, None) == in_path:
         st.error(f"Encoding failed. {st.session_state[EncodeResultKeys.ERROR]}")
 
     # Everything was great - show that it succeeded and add a subsection for downloading results
-    if EncodeResultKeys.FRAMER in st.session_state:
+    if EncodeResultKeys.FRAMER in st.session_state and in_path is not None:
         st.success("Encoded successfully!")
 
         # Show results and downloads
         show_oligo_layout(st.session_state[EncodeResultKeys.FRAMER])
         show_info(st.session_state[EncodeResultKeys.FRAMER], st.session_state[EncodeResultKeys.ORIGINAL_SIZE])
-        show_downloads(st.session_state[EncodeResultKeys.FRAMER], st.session_state[EncodeResultKeys.JSON])
+        show_downloads(
+            in_path=in_path,
+            strands=st.session_state[EncodeResultKeys.FRAMER].framed_oligos,
+            json_path=st.session_state[EncodeResultKeys.JSON],
+            json_help="Needed on the decode page to decode the oligos.",
+            strand_help="The oligos, one per line. Cannot be uploaded on the decode page.",
+            suffix="encoded"
+        )
 
 # The input changed since the last run, so the other pages shouldn't keep using oligos for an input that is no longer
 #   picked. Forget the old run too, so this only happens once - otherwise a JSON made later on another page (e.g. the

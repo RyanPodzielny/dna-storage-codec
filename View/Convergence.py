@@ -20,7 +20,7 @@ from Model.Encode.Methods.Encoding import Encoding
 from Model.Helpers.Errors import Error
 from Model.Serialize.EncoderSerializer import Serializer
 from View.Helpers import ViewHelpers
-from View.Helpers.ViewHelpers import UploadKeys, clean_primer, slider_with_input, show_input_settings
+from View.Helpers.ViewHelpers import UploadKeys, clean_primer, slider_with_input, show_input_settings, show_downloads
 
 
 #------------------------------------------------------------------------------#
@@ -437,11 +437,9 @@ def cluster_and_consensus(in_path: Path,
     st.session_state[ConvergenceResultKeys.JSON] = json_path
 
     # The consensus strands are now the oligos the rest of the pages use (e.g. decoding), same as a fresh encode
+    #   This page swaps it back to the input it came from, so the primers are not filled in again either
     if json_path is not None:
         st.session_state[ViewHelpers.ENCODED_JSON_PATH_KEY] = json_path
-
-        # Our own JSON has the same primers as the input, so don't fill them in again over anything the user typed
-        st.session_state[ClusteringKeys.PRIMERS_FROM] = json_path
 
 
 def show_results(num_reads: int, strands: list[str]) -> None:
@@ -479,43 +477,6 @@ def show_results(num_reads: int, strands: list[str]) -> None:
     )
 
 
-def show_downloads(in_path: Path, strands: list[str], json_path: Path | None) -> None:
-    """
-    Shows the download buttons for the consensus strands as a text file, and the JSON with them in it if the input
-    was a JSON file.
-
-    Args:
-        in_path: The path to the input, used to name the downloads.
-        strands: The consensus strand of every cluster.
-        json_path: The path to the JSON file with the consensus strands, or None if the input was a text file.
-    """
-    st.subheader("Download", divider="gray")
-
-    # Downloads right next to each other - a horizontal container puts them in a row without spreading them out like
-    #   columns do
-    with st.container(horizontal=True):
-        # Only a JSON input has settings to put the strands back in to
-        if json_path is not None:
-            st.download_button(
-                label="Download settings (.json)",
-                help="The JSON with the consensus strands added to its oligos, can be uploaded on the decode page.",
-                data=json_path.read_bytes(),
-                file_name=json_path.name,
-                mime="application/json",
-                icon=":material/download:",
-            )
-
-        # One strand per line, same format as Serializer.save_segments_to_text, so it can be uploaded on the other pages
-        st.download_button(
-            label="Download strands (.txt)",
-            help="The consensus strands, one per line. Cannot be uploaded on the decode page.",
-            data="\n".join(strands) + "\n",
-            file_name=f"{in_path.stem}-converged.txt",
-            mime="text/plain",
-            icon=":material/download:",
-        )
-
-
 
 #------------------------------------------------------------------------------#
 #                                                                              #
@@ -538,6 +499,15 @@ st.subheader("Input", divider="gray")
 in_path: Path | None
 is_json: bool
 in_path, is_json = show_input_settings("convergence_input_method", JSON_UPLOAD_KEYS, TEXT_UPLOAD_KEYS)
+
+# A run sets its consensus JSON as the session's oligos (so decoding picks it up), which would make the next run cluster
+#   the old oligos plus the consensus strands added to them. Swap it back to the oligos that run started from. Done
+#   before the settings, so the primers are filled in from the original too
+last_in_path: Path | None = st.session_state.get(ConvergenceResultKeys.IN_PATH, None)
+last_json_path: Path | None = st.session_state.get(ConvergenceResultKeys.JSON, None)
+if last_in_path is not None and last_json_path is not None and in_path == last_json_path:
+    in_path = last_in_path
+    st.caption(f"Clustering the original oligos ({last_in_path.name}), not the last consensus ones.")
 
 
 # Settings section
@@ -575,11 +545,11 @@ if st.button("Perform Clustering and Consensus", type="primary", disabled=not re
         if in_path is not None and clustering_config is not None:
             cluster_and_consensus(in_path, is_json, clustering_config, consensus_config)
 
-# Only show results for the input currently picked, so old results don't show next to a new file. A run on the session's
-#   oligos sets its own JSON as the session's oligos, so the input is then that JSON - still the same results
-last_in_path: Path | None = st.session_state.get(ConvergenceResultKeys.IN_PATH, None)
-last_json_path: Path | None = st.session_state.get(ConvergenceResultKeys.JSON, None)
-if last_in_path == in_path or (last_json_path is not None and last_json_path == in_path):
+# Only show results for the input currently picked, so old results don't show next to a new file. Read again, as
+#   pressing the button just replaced the last run
+last_in_path = st.session_state.get(ConvergenceResultKeys.IN_PATH, None)
+last_json_path = st.session_state.get(ConvergenceResultKeys.JSON, None)
+if last_in_path == in_path:
     # If there was an error show
     if ConvergenceResultKeys.ERROR in st.session_state:
         st.error(f"Clustering and consensus failed. {st.session_state[ConvergenceResultKeys.ERROR]}")
@@ -594,4 +564,7 @@ if last_in_path == in_path or (last_json_path is not None and last_json_path == 
             in_path=last_in_path,
             strands=st.session_state[ConvergenceResultKeys.STRANDS],
             json_path=last_json_path,
+            json_help="The JSON with the consensus strands added to its oligos, can be uploaded on the decode page.",
+            strand_help="The consensus strands, one per line. Cannot be uploaded on the decode page.",
+            suffix="converged"
         )

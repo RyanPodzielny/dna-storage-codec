@@ -57,8 +57,8 @@ class ErrorRecord:
         SUBSTITUTION = "substitution"
         INSERTION = "insertion"
         DELETION = "deletion"
-        TRUNCATION = "truncation"
         DROPOUT = "dropout"
+        TRUNCATION = "truncation"
 
 
     # For recording so you know what each field means (better for serialization in a JSON)
