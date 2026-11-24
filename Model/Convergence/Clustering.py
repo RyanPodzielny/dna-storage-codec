@@ -103,7 +103,7 @@ class Clustering:
 
     #--------------------------------------------------------------------------#
     #                                                                          #
-    #   PRIVATE SHARED METHODS                                                 #
+    #   PRIVATE METHODS                                                        #
     #                                                                          #
     #--------------------------------------------------------------------------#
 
@@ -227,13 +227,6 @@ class Clustering:
         return new_reads
 
 
-    #--------------------------------------------------------------------------#
-    #                                                                          #
-    #   PRIVATE HELPER METHODS                                                 #
-    #                                                                          #
-    #--------------------------------------------------------------------------#
-
-
     def _get_seeds(self, body: str) -> set[str]:
         """
         Gets every kmer of a read. A set - kmer the read has more than once (e.g. run of the same base) is counted once.
@@ -335,7 +328,7 @@ class Clustering:
         #   column that isn't a match, and there are at most as many columns as both reads put together. So this is a
         #   safe place for edlib to stop early (it is loose, but never stops on one that could reach the threshold)
         max_edits: int = math.floor((1 - self.config.identity) * (len(body) + len(centroid))) + \
-            abs(len(body) - len(centroid))
+                            abs(len(body) - len(centroid))
 
         # The gaps hanging off the ends have to be free in the alignment itself, not just dropped afterwards. With a
         #   global alignment, a read missing its first bases can have those gaps placed anywhere near the start for the
