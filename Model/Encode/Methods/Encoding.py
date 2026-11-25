@@ -205,8 +205,8 @@ class Encoding:
 
         Returns:
             The number of runs of DNA bases in the string that are at least of length k. And where they occur in the
-                string, as a list of tuples of (start_index, end_index) for each run. If no runs are found, r
-                returns an empty list.
+            string, as a list of tuples of (start_index, end_index) for each run. If no runs are found, returns an empty
+            list.
 
         Raises:
             ValueError: If k is less than 1.
@@ -216,6 +216,10 @@ class Encoding:
 
         if not data:
             return 0, []
+
+        # If we are not dealing with a DNA base, don't bother counting
+        if data[0] not in self.DNA_BASES:
+            return -1, []
 
         count: int = 0
         current_run_length: int = 1
@@ -243,7 +247,7 @@ class Encoding:
         # Check the last run
         if current_run_length >= k:
             count += 1
-            indices.append((len(data) - current_run_length + 1, len(data)))
+            indices.append((len(data) - current_run_length, len(data) - 1))
 
         return count, indices
 
@@ -313,8 +317,6 @@ class EncodingStats:
 
         if self.num_bases > 0:
             self.gc_content = gc_bases / self.num_bases * 100
-
-
 
 
     def print_info(self, original_size: int, indent: str = "\t", describe: bool = False) -> None:

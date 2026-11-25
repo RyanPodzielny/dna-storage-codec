@@ -77,7 +77,13 @@ class Huffman(Encoding):
         
         Returns:
             A dictionary mapping each character to its frequency in the input data.
+
+        Raises:
+            ValueError: If k is less than or equal to 0.
         """
+        if k <= 0:
+            raise ValueError("k must be larger than 0")
+
         # Count the frequency of each character in the input data
         frequencies: dict[str, int] = {}
         for index in range(0, len(data) - k + 1, k):
@@ -436,6 +442,7 @@ class Huffman(Encoding):
                 decoded_data += huffman_codes[current_code]
                 current_code = ""
 
+        # We throw out remainder codes if couldn't be found - they are likely junk/filler
         return decoded_data
 
 
