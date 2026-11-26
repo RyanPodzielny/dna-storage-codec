@@ -20,7 +20,7 @@ import numpy as np
 
 from Model.Encode.Methods.Encoding import Base
 from Model.Helpers.Errors import SimulationError
-from Model.Simulate.ErrorConfig import DNA_BASES, CoverageDistribution, GCWindow, Stage, ErrorConfig, SynthesisConfig, \
+from Model.Simulate.ErrorConfigs import DNA_BASES, CoverageDistribution, GCWindow, Stage, ErrorConfig, SynthesisConfig, \
     AgingConfig, PCRConfig, SequencingConfig
 
 

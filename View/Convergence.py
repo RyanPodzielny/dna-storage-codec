@@ -418,7 +418,7 @@ def cluster_and_consensus(in_path: Path,
 
         # Add the consensus strands to the JSON's oligos (the old ones are kept), so it can be decoded straight away
         if is_json:
-            json_path = Path(mkdtemp(prefix="dna_codec_")) / f"{in_path.stem}-converged.json"
+            json_path = Path(mkdtemp(prefix=ViewHelpers.TEMPORARY_FILE_PREFIX)) / f"{in_path.stem}-converged.json"
             Serializer.save_with_added_oligos(str(in_path), strands, str(json_path))
 
     # The JSON no longer matches what is expected (it is checked on upload, but the encoded one is not)

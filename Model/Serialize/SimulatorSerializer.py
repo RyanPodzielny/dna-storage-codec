@@ -13,7 +13,7 @@ from the file alone.
 from pathlib import Path
 from typing import Literal
 from pydantic import BaseModel, ConfigDict
-from Model.Simulate.ErrorConfig import AgingConfig, PCRConfig, SequencingConfig, Stage, SynthesisConfig
+from Model.Simulate.ErrorConfigs import AgingConfig, PCRConfig, SequencingConfig, Stage, SynthesisConfig
 from Model.Simulate.ErrorSimulator import ErrorDictKeys, ErrorRecord, ErrorType
 
 

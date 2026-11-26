@@ -7,15 +7,18 @@ session state. These are used in multiple places, so they are kept here to avoid
 from enum import StrEnum
 from pathlib import Path
 from tempfile import mkdtemp
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Final, TypeVar
 
 import streamlit as st
 from streamlit.runtime.uploaded_file_manager import UploadedFile
+from streamlit_segment_slider import segment_slider
 from pydantic import BaseModel, ValidationError
 
-from Model.Encode.Methods.Encoding import Encoding
+from Model.Encode.Methods.Encoding import Base, Encoding
 from Model.Helpers.Errors import Error
 from Model.Serialize.EncoderSerializer import Serializer
+from Model.Simulate import ErrorConfigs
+from Model.Simulate.ErrorConfigs import CoverageDistribution
 
 
 #------------------------------------------------------------------------------#
@@ -30,18 +33,50 @@ from Model.Serialize.EncoderSerializer import Serializer
 #   path to the newly encoded JSON file, where we can use in simulation, clustering and decoding.
 ENCODED_JSON_PATH_KEY: str = "encoded_json_path"
 
+# Prefix for the temporary folder we make to hold a copy of an uploaded file
+TEMPORARY_FILE_PREFIX: Final[str] = "dna_codec_"
+
 # A slider with an input works on either ints or floats, but every number given to one has to be the same type. Would 
 #   be nice if we could jsut do type Number = int | float, but typing check throws a fit since it doesnt implicit cast.
 #   Kinda stupid so we are stuck with TypeVars
 Number = TypeVar("Number", int, float)
+
+# Rates are tiny (some are 0.000001), so no sliders - and %g so they don't show trailing 0's like %f would
+RATE_FORMAT: Final[str] = "%.6g"
+RATE_STEP: Final[float] = 0.0001
+PROBABILITY_RANGE: Final[tuple[float, float]] = (0.0, 1.0)
+
+# How far a split slider's cuts move each step - the slider's own default is 1, which snaps every cut to 0 or 1
+SPLIT_STEP: Final[float] = 0.01
+
+
+# Constants for the encoder settings - the options in the drop down, and the session state keys for their arguments
+class CoverageNames(StrEnum):
+    FIXED = "Fixed"
+    POISSON = "Poisson"
+    NEGATIVE_BINOMIAL = "Negative Binomial"
+
+# The ways copies (synthesis) or reads (sequencing) get handed out to each strand, unknown isn't one the user can pick
+COVERAGE_OPTIONS: Final[dict[CoverageNames, CoverageDistribution]] = {
+    CoverageNames.FIXED: CoverageDistribution.FIXED,
+    CoverageNames.POISSON: CoverageDistribution.POISSON,
+    CoverageNames.NEGATIVE_BINOMIAL: CoverageDistribution.NEGATIVE_BINOMIAL,
+}
+
+# A short description of each distribution, shown under the drop down
+COVERAGE_DESCRIPTIONS: Final[dict[CoverageDistribution, str]] = {
+    CoverageDistribution.FIXED: "Every strand gets exactly the depth, no bias at all.",
+    CoverageDistribution.POISSON: "A random amount around the depth, what you would get from ideal random sampling.",
+    CoverageDistribution.NEGATIVE_BINOMIAL: "Poisson with extra spread set by the dispersion. Matches real data the"
+                                            " best (Heckel et al.).",
+}
 
 
 class HelperInputs(StrEnum):
     # Need to make these keys as Streamlit doesn't keep the text_input box written, when user switches. Just easier.
     JSON_UPLOAD = "JSON Upload"
     TEXT_UPLOAD = "Raw Oligo Upload"
-
-
+    
 
 # Just using pydantic instead of dataclass to keep it consistent with everything else
 class UploadKeys(BaseModel):
@@ -190,7 +225,7 @@ def contents_to_file(contents: str, filename: str) -> Path:
     # Want to write to temp file as our backend accepts an in-path. Makes it much easier. Using mkdtemp instead of
     #   TemporaryDirectory, as TemporaryDirectory deletes the folder as soon as the object is garbage collected (i.e.
     #   right after this function returns), so the path we hand back would point at nothing.
-    temp_directory: str = mkdtemp(prefix="dna_codec_")
+    temp_directory: str = mkdtemp(prefix=TEMPORARY_FILE_PREFIX)
     file_path: Path = Path(temp_directory) / filename
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(contents)
@@ -406,6 +441,292 @@ def slider_with_input(label: str,
         )
 
     return value
+
+
+def rate_input(label: str, key: str, default: float, help: str) -> float:
+    """
+    A number input for a rate, a probability between 0 and 1. Rates are tiny so there is no slider, and it shows no
+    trailing 0's. Keeps its value for the whole session.
+
+    Args:
+        label: The label shown above the input.
+        key: The key of the input, must be different for every input.
+        default: The value used before the user changes anything.
+        help: The tooltip shown beside the label.
+
+    Returns:
+        The rate picked.
+    """
+    rate: float = st.number_input(
+        label=label,
+        min_value=PROBABILITY_RANGE[0],
+        max_value=PROBABILITY_RANGE[1],
+        step=RATE_STEP,
+        value=default,
+        format=RATE_FORMAT,                 # No trailing 0's
+        key=key,
+        help=help,
+        persist_state="session",            # Keep value for whole session
+    )
+
+    return rate
+
+
+def split_slider(label: str, key: str, segment_labels: list[str], default_chances: list[float]) -> list[float]:
+    """
+    A slider from 0 to 1 split into one segment per label, so the chances always add to 1. Used for "given an error
+    happens, which base do we get" - e.g. a substituted A becomes C, G, or T.
+
+    Args:
+        label: The label shown above the slider.
+        key: The base key, the slider and our saved copy of it use this with "_split" and "_cuts" added.
+        segment_labels: The name of each segment, left to right.
+        default_chances: The starting chance of each segment, in the same order as the labels. Must add to 1.
+
+    Returns:
+        The chance of each segment, in the same order as the labels.
+    """
+    # The slider takes the points between the segments, so add the chances up to get them - e.g. 1/3 each is cut at 1/3
+    #   and 2/3. The last chance is just whatever is left after the last cut, so it isn't needed
+    cuts: list[float] = []
+    running_total: float = 0.0
+    for chance in default_chances[:-1]:
+        running_total += chance
+        cuts.append(running_total)
+
+    # The slider has no persist_state, Streamlit forgets it when the user goes to another page. So keep our own copy of
+    #   the cuts and start from that instead, same as persist_state="session" does for other widgets
+    saved_key: str = f"{key}_cuts"
+    cuts = st.session_state.get(saved_key, cuts)
+
+    # Now show with the slider
+    cuts = segment_slider(
+        label=label,
+        min_value=PROBABILITY_RANGE[0],
+        max_value=PROBABILITY_RANGE[1],
+        values=cuts,
+        step=SPLIT_STEP,                    # Default step is 1, which snaps every cut to 0 or 1    # type: ignore
+        segment_labels=segment_labels,
+        key=f"{key}_split",
+        show_chart=False,                   # Pie chart is way too big when there are a few of these
+        show_segment_labels=True,           # Shows each segment and its chance on the slider itself instead
+    )
+    st.session_state[saved_key] = cuts
+
+    # Each chance is the length of its segment - the gap between the cuts on either side of it
+    edges: list[float] = [PROBABILITY_RANGE[0]] + cuts + [PROBABILITY_RANGE[1]]
+    chances: list[float] = []
+    for index in range(len(segment_labels)):
+        chances.append(edges[index + 1] - edges[index])
+
+    return chances
+
+
+
+def per_base_rate(name: str,
+                  key: str, 
+                  stage_rate: dict[Base, float], 
+                  default: float) -> dict[Base, float]:
+    """
+    A rate input for a per-base error rate, with a markdown description above it. The rate is a probability between 0
+    and 1, and is kept in session state so switching pages doesn't reset it.
+
+    Args:
+        name: What the error is called, used in the label (e.g. "substitution").
+        key: The key of the input, must be different for every input.
+        stage_rate: The current rate for each base, used to set the starting value of each input.
+        default: The value used before the user changes anything, if the stage_rate doesn't have a value for that base.
+
+    Returns:
+        The rate picked per base.
+    """
+    # Show what setting we are changing 
+    st.markdown(
+        body="Per Base Rate:", 
+        help=f"Uses the overall {name} rate as the starting point for each base's rate."
+    )
+    
+    # Every base gets its own rate, starting at the stage's overall substitution rate
+    per_base: dict[Base, float] = {}
+    columns: list[Any] = st.columns(len(ErrorConfigs.DNA_BASES))
+
+    # Go through each base as a column so they all fit on one row
+    for column, base in zip(columns, list(ErrorConfigs.DNA_BASES)):
+        with column:
+            per_base[base] = rate_input(
+                label=f"**{base}** rate:",      # Make the input bold so more clear
+                key=f"{key}_{base}",            # Every base needs its own key, e.g. "..._substitution_per_base_A"
+                default=stage_rate.get(base, default),
+                help=f"Chance each {base} is substituted for a different base.",
+            )
+
+    return per_base
+
+
+def length_settings(name: str,
+                    key: str,
+                    length_range: tuple[int, int],
+                    min_default: int,
+                    probability_default: float,
+                    max_default: int | None) -> tuple[int, float, int | None]:
+    """
+    How long each error is (e.g. an insertion or deletion), all on one row. It starts at the min length, then each
+    extra base is added with a geometric chance, capped at the max length. The max can be left empty for no limit, but
+    only if its default is empty too - otherwise Streamlit won't let the box be cleared.
+
+    Args:
+        name: What the error is called, used in the labels (e.g. "insertion").
+        key: The base key, each input uses this with "_min_length", "_length_probability", or "_max_length" added.
+        length_range: The lowest and highest length allowed.
+        min_default: The min length used before the user changes anything.
+        probability_default: The single base chance used before the user changes anything.
+        max_default: The max length used before the user changes anything, None for no limit.
+
+    Returns:
+        A tuple containing:
+            - The min length.
+            - The chance the error stops at the min length.
+            - The max length, or None for no limit.
+    """
+    # Show what setting we are changing
+    st.markdown(
+        body=f"{name.capitalize()} length:",
+        help=f"Every {name} is at least the min length. A single base chance of 1 means every {name} is exactly"
+                f" the min length."
+    )
+
+    # All three fit on one row
+    min_column: Any
+    probability_column: Any
+    max_column: Any
+    min_column, probability_column, max_column = st.columns(3)
+
+    # Shortest it can be
+    with min_column:
+        min_length: int = st.number_input(
+            label="Min length:",
+            min_value=length_range[0],
+            max_value=length_range[1],
+            step=1,
+            value=min_default,
+            key=f"{key}_min_length",
+            help=f"The shortest a {name} can be.",
+            persist_state="session",
+        )
+
+    # Chance it stops at the min length, can't be 0 or it would never end
+    with probability_column:
+        length_probability: float = st.number_input(
+            label="Single base chance:",
+            min_value=0.01,
+            max_value=PROBABILITY_RANGE[1],
+            step=0.01,
+            value=probability_default,
+            format=RATE_FORMAT,
+            key=f"{key}_length_probability",
+            help=f"Chance the {name} stops at the min length, otherwise it gets one base longer and tries again.",
+            persist_state="session",
+        )
+
+    # Longest it can be - empty (None) means no max, only possible when the default is None
+    max_help: str = f"The longest a {name} can be."
+    if max_default is None:
+        max_help += f" Leave empty for no limit, so a {name} can run to the end of the strand."
+
+    with max_column:
+        max_length: int | None = st.number_input(
+            label="Max length:",
+            min_value=length_range[0],
+            max_value=length_range[1],
+            step=1,
+            value=max_default,
+            placeholder="No limit",             # Shown when empty, so the user knows empty means no max
+            key=f"{key}_max_length",
+            help=max_help,
+            persist_state="session",
+        )
+
+    return min_length, length_probability, max_length
+
+
+def coverage_settings(key: str,
+                      depth_label: str,
+                      depth_help: str,
+                      depth_range: tuple[int, int],
+                      depth_default: int,
+                      distribution_default: CoverageDistribution,
+                      dispersion_default: float) -> tuple[int, CoverageDistribution, float]:
+    """
+    How many copies (synthesis) or reads (sequencing) each strand gets, and how they are handed out - the mean depth,
+    the distribution it is drawn from, and how spread out it is. All on one row, the dispersion is greyed out unless
+    the distribution is negative binomial as nothing else uses it.
+
+    Args:
+        key: The base key, each input uses this with "_depth", "_distribution", or "_dispersion" added.
+        depth_label: The label of the depth input, e.g. "Synthesis depth:".
+        depth_help: The tooltip of the depth input.
+        depth_range: The lowest and highest depth allowed.
+        depth_default: The depth used before the user changes anything.
+        distribution_default: The distribution used before the user changes anything.
+        dispersion_default: The dispersion used before the user changes anything.
+
+    Returns:
+        A tuple containing:
+            - The mean depth.
+            - The distribution picked.
+            - The dispersion.
+    """
+    # All three fit on one row, aligned at the bottom so they line up
+    depth_column: Any
+    distribution_column: Any
+    dispersion_column: Any
+    depth_column, distribution_column, dispersion_column = st.columns(3, vertical_alignment="bottom")
+
+    # Mean amount each strand gets
+    with depth_column:
+        depth: int = st.number_input(
+            label=depth_label,
+            min_value=depth_range[0],
+            max_value=depth_range[1],
+            step=1,
+            value=depth_default,
+            key=f"{key}_depth",
+            help=depth_help,
+            persist_state="session",            # Keep value for whole session
+        )
+
+    # How it is handed out to each strand
+    with distribution_column:
+        distribution_name: CoverageNames = st.selectbox(
+            label="Distribution:",
+            options=COVERAGE_OPTIONS.keys(),
+            # Looks janky but we want an uploaded file (our new default) to show if when redrawn. So we need to index it
+            #   by its value, not the enum name.
+            index=list(COVERAGE_OPTIONS.values()).index(distribution_default),  
+            key=f"{key}_distribution",
+            help="How the depth is handed out to each strand.",
+            persist_state="session",
+        )
+        distribution: CoverageDistribution = COVERAGE_OPTIONS[distribution_name]
+
+    # Only negative binomial uses the dispersion, so grey it out otherwise
+    with dispersion_column:
+        dispersion: float = st.number_input(
+            label="Dispersion:",
+            min_value=0.01,                     # Has to be above 0
+            step=1.0,
+            value=dispersion_default,
+            format=RATE_FORMAT,                 # No trailing 0's
+            key=f"{key}_dispersion",
+            help="How uneven the negative binomial is. 1 is very uneven (geometric), near 100 is nearly even. Only"
+                 " used with negative binomial.",
+            disabled=distribution != CoverageDistribution.NEGATIVE_BINOMIAL,
+            persist_state="session",
+        )
+
+    st.caption(COVERAGE_DESCRIPTIONS[distribution])
+
+    return depth, distribution, dispersion
 
 
 def show_input_settings(control_key: str, json_keys: UploadKeys, text_keys: UploadKeys) -> tuple[Path | None, bool]:

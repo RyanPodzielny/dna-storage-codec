@@ -785,7 +785,7 @@ def encode(in_path: Path,
         framer.frame_all_oligos()
 
         # Save the framer to a JSON file now, so it can be downloaded for the decode page
-        json_path: Path = Path(mkdtemp(prefix="dna_codec_")) / f"{Path(in_path).stem}-framed.json"
+        json_path: Path = Path(mkdtemp(prefix=ViewHelpers.TEMPORARY_FILE_PREFIX)) / f"{Path(in_path).stem}-framed.json"
         Serializer.save_framer(framer, str(json_path))
 
     # A setting the config doesn't accept

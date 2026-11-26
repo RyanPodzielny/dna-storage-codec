@@ -197,3 +197,16 @@ class SimulationError(Error):
                  *,
                  message: str = "Simulation error occurred"):
         super().__init__(message=f"{message}: An error occurred during the simulation process.")
+
+
+
+class InvalidFieldError(Error):
+    """
+    Error raised when a field is invalid or not recognized.
+    """
+    def __init__(self, 
+                 *,
+                 message: str = "Invalid field error",
+                 field_name: str):
+        self.field_name: str = field_name
+        super().__init__(f"{message}: {field_name} is not a valid or recognized field.")

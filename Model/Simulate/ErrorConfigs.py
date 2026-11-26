@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegative
 import numpy as np
 
 from Model.Encode.Methods.Encoding import Base
+from Model.Helpers.Errors import InvalidFieldError
 
 
 #------------------------------------------------------------------------------#
@@ -467,7 +468,6 @@ class ErrorConfig(BaseModel):
             raise ValueError(f"insertion_conditional must sum to 1, got {round(insertion_total, 6)}")
 
 
-
 class SynthesisConfig(ErrorConfig):
     """
     Synthesis writes each strand base by base, and makes many copies of each one. Most insertions and deletions come
@@ -609,3 +609,157 @@ class SequencingConfig(ErrorConfig):
 
     # Cut short strands mostly come from synthesis (chain termination), reading rarely cuts them. Advanced only
     truncation_rate: Probability = 0.00001
+
+
+
+#------------------------------------------------------------------------------#
+#                                                                              #
+#   CONFIG FIELD NAMES                                                         #
+#                                                                              #
+#------------------------------------------------------------------------------#
+
+
+
+# The names of the config fields, so anywhere a config is built from a dict (e.g. the Simulate page builds every stage's
+#   config from what the user picked) can use these instead of typing the names out. Every enum is checked against its
+#   model below when this module loads, so they always line up with the configs.
+
+
+# Fields of the GCWindow inside gc_window - its own model, not part of a config
+class GCWindowFields(StrEnum):
+    WINDOW_SIZE = "window_size"
+    LOWER_BOUND = "lower_bound"
+    UPPER_BOUND = "upper_bound"
+    SLOPE = "slope"
+
+
+# Every ErrorConfig field, so every stage has these. Member names are the field names in capitals
+class ErrorConfigFields(StrEnum):
+    # Which stage, and how it runs
+    STAGE = "stage"
+    SEED = "seed"
+    ENABLED = "enabled"
+    ADVANCED_MODE = "advanced_mode"
+
+    # Substitutions
+    SUBSTITUTION_RATE = "substitution_rate"
+    SUBSTITUTION_RATE_PER_BASE = "substitution_rate_per_base"
+    SUBSTITUTION_CONDITIONAL = "substitution_conditional"
+
+    # Insertions
+    INSERTION_RATE = "insertion_rate"
+    INSERTION_RATE_AFTER_BASE = "insertion_rate_after_base"
+    INSERTION_CONDITIONAL = "insertion_conditional"
+    INSERTION_REPEAT_PREVIOUS = "insertion_repeat_previous"
+    INSERTION_MIN_LENGTH = "insertion_min_length"
+    INSERTION_LENGTH_PROBABILITY = "insertion_length_probability"
+    INSERTION_MAX_LENGTH = "insertion_max_length"
+
+    # Deletions
+    DELETION_RATE = "deletion_rate"
+    DELETION_RATE_PER_BASE = "deletion_rate_per_base"
+    DELETION_MIN_LENGTH = "deletion_min_length"
+    DELETION_LENGTH_PROBABILITY = "deletion_length_probability"
+    DELETION_MAX_LENGTH = "deletion_max_length"
+
+    # Homopolymers
+    HOMOPOLYMER_CHECK = "homopolymer_check"
+    HOMOPOLYMER_MIN_LENGTH = "homopolymer_min_length"
+    HOMOPOLYMER_SUBSTITUTION_MULTIPLIER = "homopolymer_substitution_multiplier"
+    HOMOPOLYMER_INSERTION_MULTIPLIER = "homopolymer_insertion_multiplier"
+    HOMOPOLYMER_DELETION_MULTIPLIER = "homopolymer_deletion_multiplier"
+    HOMOPOLYMER_DROPOUT_LENGTH = "homopolymer_dropout_length"
+    HOMOPOLYMER_DROPOUT_RATE = "homopolymer_dropout_rate"
+
+    # GC content
+    GC_CONTENT_CHECK = "gc_content_check"
+    GC_WINDOW = "gc_window"
+
+    # Position bias
+    POSITION_SLOPE = "position_slope"
+
+    # Strand loss
+    TRUNCATION_RATE = "truncation_rate"
+    DROPOUT_RATE = "dropout_rate"
+
+
+# Only synthesis has these
+class SynthesisFields(StrEnum):
+    SYNTHESIS_DEPTH = "synthesis_depth"
+    COPY_DISTRIBUTION = "copy_distribution"
+    COPY_DISPERSION = "copy_dispersion"
+
+
+# Only aging has these
+class AgingFields(StrEnum):
+    YEARS = "years"
+    HALF_LIFE_YEARS = "half_life_years"
+    DEAMINATION_RATE = "deamination_rate"
+
+
+# Only PCR has these
+class PCRFields(StrEnum):
+    CYCLES = "cycles"
+    EFFICIENCY = "efficiency"
+    EFFICIENCY_STD = "efficiency_std"
+    EFFICIENCY_CYCLE_STD = "efficiency_cycle_std"
+    GC_EFFICIENCY_SLOPE = "gc_efficiency_slope"
+
+
+# Only sequencing has these
+class SequencingFields(StrEnum):
+    READ_DEPTH = "read_depth"
+    READ_DISTRIBUTION = "read_distribution"
+    READ_DISPERSION = "read_dispersion"
+
+
+# Each enum and the fields it has to match. ErrorConfigFields is every ErrorConfig field, each stage's enum is only the
+#   fields that stage adds on top of ErrorConfig, and GCWindowFields is every GCWindow field
+FIELD_MODELS: Final[dict[type[StrEnum], tuple[type[BaseModel], type[BaseModel] | None]]] = {
+    ErrorConfigFields: (ErrorConfig, None),
+    GCWindowFields: (GCWindow, None),
+    SynthesisFields: (SynthesisConfig, ErrorConfig),
+    AgingFields: (AgingConfig, ErrorConfig),
+    PCRFields: (PCRConfig, ErrorConfig),
+    SequencingFields: (SequencingConfig, ErrorConfig),
+}
+
+
+def _check_field_names() -> None:
+    """
+    Makes sure every enum above matches its model's fields exactly - nothing listed that the model doesn't have, and
+    nothing the model has that isn't listed. The configs forbid extra fields, so a wrong name would only fail once that
+    config is built. This catches a renamed, added, or removed field as soon as the module loads instead.
+
+    Raises:
+        InvalidFieldError: If an enum lists a field its model doesn't have, or is missing one its model has.
+    """
+    for fields, (model, parent) in FIELD_MODELS.items():
+        # The fields the enum has to match, in the order the model declares them - a stage's own fields leave out the
+        #   ones it gets from ErrorConfig
+        model_fields: list[str] = []
+        for name in model.model_fields:
+            # Skip the fields a stage gets from ErrorConfig, those are checked with ErrorConfigFields
+            if parent is not None and name in parent.model_fields:
+                continue
+            model_fields.append(name)
+
+        # Listed in the enum, but the model doesn't have it
+        for field in fields:
+            if field.value not in model_fields:
+                raise InvalidFieldError(
+                    message=f"{fields.__name__} lists a field {model.__name__} doesn't have",
+                    field_name=field.value,
+                )
+
+        # The model has it, but the enum doesn't list it - the first one the model declares is the one reported
+        listed: set[str] = {field.value for field in fields}
+        for model_field in model_fields:
+            if model_field not in listed:
+                raise InvalidFieldError(
+                    message=f"{fields.__name__} is missing a field of {model.__name__}, it doesn't list",
+                    field_name=model_field,
+                )
+
+
+_check_field_names()

@@ -18,7 +18,7 @@ import edlib
 from pydantic import BaseModel, ConfigDict, PositiveInt
 
 from Model.Encode.OligoFramer import Primer
-from Model.Simulate.ErrorConfig import Probability
+from Model.Simulate.ErrorConfigs import Probability
 
 #------------------------------------------------------------------------------#
 #                                                                              #
