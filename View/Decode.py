@@ -175,15 +175,17 @@ def show_error_indices(error_indices: list[int]) -> None:
     """
     # Just make it a new section
     st.subheader("Errors", divider="gray")
-    st.write(f"{len(error_indices)} segments could not be recovered:")
+    st.write(f"{len(error_indices)} segments could not be recovered")
 
-    # Index column is our own, so hide pandas' one
-    data: pd.DataFrame = pd.DataFrame({"Index": error_indices})
-    st.dataframe(
-        data=data,
-        hide_index=True,
-        width="stretch",                    # Take up the full width of the page
-    )
+    # Use an expander like the simulator does
+    with st.expander("Expand Errors"):
+        # Index column is our own, so hide pandas' one
+        data: pd.DataFrame = pd.DataFrame({"Index": error_indices})
+        st.dataframe(
+            data=data,
+            hide_index=True,
+            width="stretch",                    # Take up the full width of the page
+        )
 
 
 
