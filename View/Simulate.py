@@ -1851,9 +1851,21 @@ def show_results(num_strands: int,
 
 
 # Page title and info
+PAGE_DESCRIPTION: Final[str] =\
+"""Simulate errors on encoded DNA strands, and download the simulated reads and error report. Error settings are 
+comprehensive, offering a simple mode for quick simulations and an detailed advanced mode for more precise control. The
+simulation runs through four stages: synthesis, aging, PCR, and sequencing, each with its own settings and stagte 
+specific parameters. Stages can be turned on or off and the simulation can be seeded for reproducibility. The results 
+include a summary of the number of strands and reads, a breakdown of errors by type and stage, and a detailed table of 
+every error that occurred. You can also download or upload simulation settings to easily replicate or share your
+simulation configurations.
+ 
+Default values are provided for each stage, which are ballpark estimates of real world error rates. This are sourced 
+mainly deduced from Heckel et al. 2019, which characterized the DNA data storage channel and provided empirical data 
+on error rates: Heckel, R., Mikutis, G., & Grass, R. N. (2019). A Characterization of the DNA Data Storage Channel."""
+
 st.title("Simulate Errors")
-# TODO: add a description of the page
-st.write("TODO: add a descirption of the page")
+st.write(PAGE_DESCRIPTION)
 
 
 # Input section

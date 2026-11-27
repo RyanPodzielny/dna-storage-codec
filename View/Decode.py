@@ -198,9 +198,14 @@ def show_error_indices(error_indices: list[int]) -> None:
 
 
 # Page title and info
+PAGE_DESCRIPTION: Final[str] =\
+"""Decode a JSON file saved from the Encoding page, or the oligos encoded earlier in the session. The decoded content is 
+compared to the original file's length and hash, and a metric is shown for how much of the file was recovered. If any 
+segments could not be recovered, their indices are shown in a table below. It is required for the user to upload or use 
+the oligos from the Encoding page, as the decoder cannot know how to decode without the encoding scheme."""
+
 st.title("Decoding")
-# TODO: add a description of the page
-st.write("TODO: add a descirption of the page")
+st.write(PAGE_DESCRIPTION)
 
 
 # Input section

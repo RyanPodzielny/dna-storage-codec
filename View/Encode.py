@@ -956,10 +956,20 @@ def show_info(framer: OligoFramer, original_size: int) -> None:
 #   homopolymers, so it needs the DirectDNA outer codes. Same as test_encoders.py
 HOMOPOLYMER_FREE: Final[set[type[Encoding]]] = {Goldman, Pgram, ComplementaryTree}
 
+PAGE_DESCRIPTION: Final[str] =\
+"""Encode a file into oligos, with primers and error correction. The oligo strands can be downloaded as a JSON file for
+the decode page, or as a text file with one oligo per line. The JSON is needed to decode the oligos. Encoding here will
+save the encoding state for the current session. meaning you can go to each page and continue your work. Available 
+encoders, indexers, inner and outer error correction codes are listed below within the settings. 
+
+After encoding the the oligo layout and stats are shown after encoding, so you can see how well the encoding performed.
+With the work saved for next stages, so you can continue with simulation, clustering, and decoding. The oligos can be 
+downloaded as a JSON file for the decode page, or as a text."""
+
+
 # Page title and info
 st.title("Encoding")
-# TODO: add a description of the page
-st.write("TODO: add a descirption of the page")
+st.write(PAGE_DESCRIPTION)
 
 
 # Input section

@@ -487,9 +487,16 @@ def show_results(num_reads: int, strands: list[str]) -> None:
 
 
 # Page title and info
+PAGE_DESCRIPTION: Final[str] =\
+"""Clustering and consensus of noisy reads. Reads are grouped by the strand they came from, and the best guess of each
+strand is found. The clustering is based off VSEARCH's cluster fast, and the consensus is found with partial order 
+alignment (POA) which is the main algorithm used for Oxford Nanopore sequencing. The input can be derived from a JSON 
+file saved from the Encoding page, or a text file of oligos one per line. Settings for the clustering and consensus 
+algorithms are shown below, and the results can be downloaded as a JSON (if a JSON was used as input) or a text file of 
+consensus strands one per line."""
+
 st.title("Clustering and Consensus")
-# TODO: add a description of the page
-st.write("TODO: add a descirption of the page")
+st.write(PAGE_DESCRIPTION)
 
 
 # Input section
